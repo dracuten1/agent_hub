@@ -2,6 +2,9 @@
 # ocTeam Driver — health + task + agent status
 set -euo pipefail
 
+# Load secrets from env
+AGENTHUB_ADMIN_PASS="${AGENTHUB_ADMIN_PASS:-}"
+
 API="http://localhost:8081"
 
 # 1. Health
