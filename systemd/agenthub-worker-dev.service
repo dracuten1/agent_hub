@@ -1,0 +1,38 @@
+[Unit]
+Description=AgentHub Dev Worker (polls dev queue, executes with OpenCode)
+Documentation=https://github.com/openclaw/agenthub
+After=network.target agenthub.service
+Wants=agenthub.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace-pm/projects/agenthub
+ExecStart=/usr/local/bin/agenthub-worker dev
+
+# API connection
+Environment="AGENTHUB_URL=http://localhost:8081"
+
+# API token and OpenCode key — set in /etc/default/agenthub-worker
+EnvironmentFile=-/etc/default/agenthub-worker
+
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agenthub-dev
+
+# Health watchdog: if no task completed in 10min, restart
+WatchdogSec=600
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/.openclaw /tmp /var/log
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

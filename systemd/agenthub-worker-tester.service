@@ -1,0 +1,34 @@
+[Unit]
+Description=AgentHub Tester Worker (polls test queue, runs test suites)
+Documentation=https://github.com/openclaw/agenthub
+After=network.target agenthub.service
+Wants=agenthub.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace-pm/projects/agenthub
+ExecStart=/usr/local/bin/agenthub-worker tester
+
+Environment="AGENTHUB_URL=http://localhost:8081"
+
+# API token and DAODUC_API_KEY — set in /etc/default/agenthub-worker
+EnvironmentFile=-/etc/default/agenthub-worker
+
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agenthub-tester
+
+# Longer timeout for test suites (e.g. Rust compilation can be slow)
+WatchdogSec=1800
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/.openclaw /tmp /var/log
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
