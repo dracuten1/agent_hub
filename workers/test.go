@@ -1,5 +1,4 @@
 // test.go implements the Tester worker for AgentHub.
-// It polls the test queue, runs tests, and reports results.
 package workers
 
 import (
@@ -13,87 +12,103 @@ import (
 	"time"
 )
 
-// TestPayload is the payload for a test task.
-type TestPayload struct {
-	Type      string `json:"type"`
-	Project   string `json:"project"`
-	Path      string `json:"path,omitempty"`
-	TestSuite string `json:"test_suite,omitempty"`
-	Branch    string `json:"branch,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-}
-
-// NewTestWorker creates a Test worker.
+// NewTestWorker creates a Test worker that polls the task queue.
 func NewTestWorker(api *API) *Worker {
-	return &Worker{
-		Name:      "tester",
-		API:       api,
-		PollPath:  "/tasks/poll?type=test",
-		ClaimPath: "/tasks/%d/claim",
-		Process:   testProcessor,
-	}
+	return NewWorker("tester", api, "/api/agent/tasks/queue", "/api/agent/tasks/%s/claim", testProcessor)
 }
 
-func testProcessor(payload json.RawMessage) Result {
-	var task TestPayload
-	if err := json.Unmarshal(payload, &task); err != nil {
-		return Result{Success: false, Error: fmt.Sprintf("unmarshal payload: %v", err)}
-	}
+func testProcessor(t *Task) Result {
+	log.Printf("[tester] Running tests for: %s", t.Title)
 
-	projectDir := task.Path
-	if projectDir == "" {
-		projectDir = fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", task.Project)
-	}
+	// Determine project dir and test suite from payload
+	projectDir, suite := detectTestTarget(t)
 
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
-		return Result{Success: false, Error: fmt.Sprintf("project not found: %s", projectDir)}
+		return Result{Success: false, Error: fmt.Sprintf("project directory not found: %s", projectDir)}
 	}
 
-	log.Printf("[tester] Running tests for %s (suite=%s)", task.Project, task.TestSuite)
+	log.Printf("[tester] Project: %s, Suite: %s", projectDir, suite)
 
-	// Detect project type and run appropriate tests
-	result := runTests(projectDir, task.TestSuite, task.Env)
+	result := runTests(projectDir, suite)
 
-	if result.ExitCode != 0 && result.ExitCode != 1 {
+	if result.ExitCode < 0 {
 		return Result{
 			Success: false,
-			Error:   fmt.Sprintf("Test runner failed with exit code %d: %s", result.ExitCode, result.Stderr),
+			Error:   fmt.Sprintf("Test runner failed: %s", result.Stderr),
 			Output:  result.Stdout + "\n" + result.Stderr,
 		}
 	}
 
-	// Parse test results
 	parsed := parseTestOutput(result.Stdout, result.Stderr)
+
+	verdict := "pass"
+	var issues []string
+	if result.ExitCode != 0 || parsed.Failed > 0 {
+		verdict = "fail"
+		issues = extractFailedTestNames(result.Stdout)
+	}
 
 	return Result{
 		Success: result.ExitCode == 0,
-		Output: formatTestOutput(parsed, result),
+		Output:  formatTestOutput(parsed, result),
 		Data: map[string]any{
-			"passed":     parsed.Passed,
-			"failed":     parsed.Failed,
-			"skipped":    parsed.Skipped,
-			"total":      parsed.Total,
+			"verdict":     verdict,
+			"passed":      parsed.Passed,
+			"failed":      parsed.Failed,
+			"skipped":     parsed.Skipped,
+			"total":       parsed.Total,
 			"duration_ms": parsed.DurationMs,
-			"exit_code":  result.ExitCode,
-			"all_passed": result.ExitCode == 0,
+			"exit_code":   result.ExitCode,
+			"issues":      issues,
 		},
 	}
 }
 
-type testResult struct {
-	Passed      int
-	Failed      int
-	Skipped     int
-	Total       int
-	DurationMs  int64
-	TestCases   []testCase
+// detectTestTarget extracts project dir and test suite from task.
+func detectTestTarget(t *Task) (string, string) {
+	projectDir := ""
+	suite := ""
+
+	if t.Payload != nil {
+		var payload map[string]any
+		if json.Unmarshal(t.Payload, &payload) == nil {
+			if path, ok := payload["path"].(string); ok && path != "" {
+				projectDir = path
+			}
+			if project, ok := payload["project"].(string); ok && project != "" {
+				if projectDir == "" {
+					projectDir = fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", project)
+				}
+			}
+			if s, ok := payload["test_suite"].(string); ok {
+				suite = s
+			}
+		}
+	}
+
+	if projectDir == "" {
+		// Try to detect from title/description
+		lower := strings.ToLower(t.Title) + strings.ToLower(t.Description)
+		for _, name := range []string{"my-tasks", "agenthub", "taskmaster"} {
+			if strings.Contains(lower, name) {
+				projectDir = fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", name)
+				break
+			}
+		}
+		if projectDir == "" {
+			projectDir = "/root/.openclaw/workspace-pm/projects/my-tasks"
+		}
+	}
+
+	return projectDir, suite
 }
 
-type testCase struct {
-	Name    string
-	Status  string // "pass", "fail", "skip"
-	Duration string
-	Error   string
+type testResult struct {
+	Passed     int
+	Failed     int
+	Skipped    int
+	Total      int
+	DurationMs int64
 }
 
 type runResult struct {
@@ -103,44 +118,35 @@ type runResult struct {
 	DurationMs int64
 }
 
-func runTests(projectDir, suite string, env map[string]string) runResult {
-	// Build environment
+func runTests(projectDir, suite string) runResult {
 	envVars := os.Environ()
-	for k, v := range env {
-		envVars = append(envVars, k+"="+v)
-	}
 
 	var cmd *exec.Cmd
-
 	switch detectProjectType(projectDir) {
-	case "node", "javascript":
-		cmd = exec.Command("npm", "test", "--", "--passWithNoTests")
-		if suite != "" {
-			cmd.Args = append(cmd.Args, "--testPathPattern="+suite)
-		}
 	case "rust":
 		cmd = exec.Command("cargo", "test")
 		if suite != "" {
 			cmd.Args = append(cmd.Args, suite)
 		}
-		cmd.Args = append(cmd.Args, "--")
-		cmd.Args = append(cmd.Args, "--test-threads=4")
+		cmd.Args = append(cmd.Args, "--", "--test-threads=4")
+	case "node", "javascript":
+		cmd = exec.Command("npm", "test", "--", "--passWithNoTests")
+		if suite != "" {
+			cmd.Args = append(cmd.Args, "--testPathPattern="+suite)
+		}
 	case "python":
 		cmd = exec.Command("python", "-m", "pytest")
 		if suite != "" {
 			cmd.Args = append(cmd.Args, "-k", suite)
 		}
+		cmd.Args = append(cmd.Args, "-v")
 	default:
-		return runResult{
-			Stdout:  "No test framework detected",
-			Stderr:  "",
-			ExitCode: 0,
-		}
+		log.Printf("[tester] No test framework detected in %s", projectDir)
+		return runResult{Stdout: "No test framework detected", ExitCode: 0}
 	}
 
 	cmd.Dir = projectDir
-	cmd.Env = envVars
-	cmd.Env = append(cmd.Env, "TERM=dumb")
+	cmd.Env = append(envVars, "TERM=dumb")
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -153,33 +159,39 @@ func runTests(projectDir, suite string, env map[string]string) runResult {
 	stderrStr := stderr.String()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			log.Printf("[tester] Test runner failed: %v (exit %d)", err, code)
 			return runResult{
-				Stdout:   stdout.String(),
-				Stderr:   stderrStr,
-				ExitCode: exitErr.ExitCode(),
+				Stdout:     stdout.String(),
+				Stderr:     stderrStr,
+				ExitCode:   code,
+				DurationMs: duration.Milliseconds(),
 			}
 		}
-		// Log the error for debugging (issue #6 fix)
-		log.Printf("[tester] Test runner failed: %v", err)
+		log.Printf("[tester] Test runner error: %v", err)
 		return runResult{
-			Stdout:   stdout.String(),
-			Stderr:   fmt.Sprintf("run error: %v", err),
-			ExitCode: -1,
+			Stdout:     stdout.String(),
+			Stderr:     fmt.Sprintf("run error: %v", err),
+			ExitCode:   -1,
+			DurationMs: duration.Milliseconds(),
 		}
 	}
 
 	return runResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderrStr,
-		ExitCode: 0,
+		Stdout:     stdout.String(),
+		Stderr:     stderrStr,
+		ExitCode:   0,
 		DurationMs: duration.Milliseconds(),
 	}
 }
 
 func detectProjectType(dir string) string {
-	files, _ := os.ReadDir(dir)
-	for _, f := range files {
-		name := f.Name()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "unknown"
+	}
+	for _, e := range entries {
+		name := e.Name()
 		if name == "Cargo.toml" {
 			return "rust"
 		}
@@ -197,28 +209,31 @@ func parseTestOutput(stdout, stderr string) testResult {
 	combined := stdout + "\n" + stderr
 	var r testResult
 
-	// Try cargo test format
-	if pass := regexp.MustCompile(`(\d+) passed`).FindStringSubmatch(combined); len(pass) > 1 {
-		fmt.Sscanf(pass[1], "%d", &r.Passed)
+	// cargo test format: "N passed", "N failed", "N ignored"
+	for _, pattern := range []struct {
+		re   *regexp.Regexp
+		dest *int
+	}{
+		{regexp.MustCompile(`(\d+) passed`), &r.Passed},
+		{regexp.MustCompile(`(\d+) failed`), &r.Failed},
+		{regexp.MustCompile(`(\d+) ignored`), &r.Skipped},
+	} {
+		if m := pattern.re.FindStringSubmatch(combined); len(m) > 1 {
+			fmt.Sscanf(m[1], "%d", pattern.dest)
+		}
 	}
-	if fail := regexp.MustCompile(`(\d+) failed`).FindStringSubmatch(combined); len(fail) > 1 {
-		fmt.Sscanf(fail[1], "%d", &r.Failed)
-	}
-	if skip := regexp.MustCompile(`(\d+) ignored`).FindStringSubmatch(combined); len(skip) > 1 {
-		fmt.Sscanf(skip[1], "%d", &r.Skipped)
-	}
-	if skip2 := regexp.MustCompile(`(\d+) skipped`).FindStringSubmatch(combined); len(skip2) > 1 {
-		fmt.Sscanf(skip2[1], "%d", &r.Skipped)
-	}
-	// Jest/Vitest format
-	if pass := regexp.MustCompile(`Tests:\s+(\d+)\s+passed`).FindStringSubmatch(combined); len(pass) > 1 {
-		fmt.Sscanf(pass[1], "%d", &r.Passed)
-	}
-	if fail := regexp.MustCompile(`Tests:\s+(\d+)\s+failed`).FindStringSubmatch(combined); len(fail) > 1 {
-		fmt.Sscanf(fail[1], "%d", &r.Failed)
-	}
-	if skip := regexp.MustCompile(`Tests:\s+\d+\s+passed.*?(\d+)\s+skipped`).FindStringSubmatch(combined); len(skip) > 1 {
-		fmt.Sscanf(skip[1], "%d", &r.Skipped)
+
+	// Jest/Vitest format: "Tests: N passed, N failed, N skipped"
+	if m := regexp.MustCompile(`Tests:\s+(?:(\d+)\s+passed,?\s+)?(?:(\d+)\s+failed,?\s+)?(?:(\d+)\s+skipped)?`).FindStringSubmatch(combined); len(m) > 1 {
+		if m[1] != "" {
+			fmt.Sscanf(m[1], "%d", &r.Passed)
+		}
+		if m[2] != "" {
+			fmt.Sscanf(m[2], "%d", &r.Failed)
+		}
+		if len(m) > 3 && m[3] != "" {
+			fmt.Sscanf(m[3], "%d", &r.Skipped)
+		}
 	}
 
 	r.Total = r.Passed + r.Failed + r.Skipped
@@ -233,6 +248,23 @@ func parseTestOutput(stdout, stderr string) testResult {
 	return r
 }
 
+func extractFailedTestNames(output string) []string {
+	var names []string
+	re := regexp.MustCompile(`(?m)^(FAIL|PASS|FAILED|TIMEOUT)[:\s]+(.+)$`)
+	for _, m := range re.FindAllStringSubmatch(output, -1) {
+		if m[1] == "FAIL" || m[1] == "FAILED" || m[1] == "TIMEOUT" {
+			name := strings.TrimSpace(m[2])
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) > 20 {
+		names = names[:20]
+	}
+	return names
+}
+
 func formatTestOutput(parsed testResult, raw runResult) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Tests: %d total, %d passed, %d failed, %d skipped\n",
@@ -244,22 +276,18 @@ func formatTestOutput(parsed testResult, raw runResult) string {
 
 	if parsed.Failed > 0 {
 		b.WriteString("--- FAILED TESTS ---\n")
-		// Try to extract failed test names
-		failedRe := regexp.MustCompile(`(FAIL|PASS)[:\s]+(.+)`)
-		for _, m := range failedRe.FindAllStringSubmatch(raw.Stdout, -1) {
-			if m[1] == "FAIL" {
-				b.WriteString("FAIL: " + m[2] + "\n")
-			}
+		re := regexp.MustCompile(`(?m)^(FAIL|FAILED)[:\s]+(.+)$`)
+		for _, m := range re.FindAllStringSubmatch(raw.Stdout, -1) {
+			b.WriteString("FAIL: " + strings.TrimSpace(m[2]) + "\n")
 		}
 	}
 
 	if raw.ExitCode == 0 {
 		b.WriteString("✅ All tests passed!")
 	} else {
-		b.WriteString("❌ Some tests failed.")
+		b.WriteString(fmt.Sprintf("❌ Tests failed (exit code %d).", raw.ExitCode))
 	}
 
-	// Limit output
 	out := b.String()
 	if len(out) > 3000 {
 		out = out[:3000] + "\n... (output truncated)"

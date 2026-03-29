@@ -1,5 +1,4 @@
 // dev.go implements the Dev worker for AgentHub.
-// It polls the dev queue, claims tasks, executes them with OpenCode, and reports results.
 package workers
 
 import (
@@ -11,58 +10,27 @@ import (
 	"strings"
 )
 
-// TaskDPayload is the payload for a dev task (Task D).
-type TaskDPayload struct {
-	Type      string `json:"type"`
-	Project   string `json:"project"`
-	TaskID    int    `json:"task_id"`
-	Model     string `json:"model,omitempty"`
-	Path      string `json:"path,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Assignee  string `json:"assignee,omitempty"`
-	ProjectID int    `json:"project_id,omitempty"`
-}
-
-// NewDevWorker creates a Dev worker.
+// NewDevWorker creates a Dev worker that polls the shared task queue.
 func NewDevWorker(api *API) *Worker {
-	return &Worker{
-		Name:      "dev",
-		API:       api,
-		PollPath:  "/tasks/poll?type=dev",
-		ClaimPath: "/tasks/%d/claim",
-		Process:   devProcessor,
-	}
+	return NewWorker("dev", api, "/api/agent/tasks/queue", "/api/agent/tasks/%s/claim", devProcessor)
 }
 
-func devProcessor(payload json.RawMessage) Result {
-	var task TaskDPayload
-	if err := json.Unmarshal(payload, &task); err != nil {
-		return Result{Success: false, Error: fmt.Sprintf("unmarshal payload: %v", err)}
-	}
+func devProcessor(t *Task) Result {
+	log.Printf("[dev] Processing: %s", t.Title)
+	log.Printf("[dev] Description: %s", t.Description)
 
-	projectDir := task.Path
-	if projectDir == "" {
-		projectDir = fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", task.Project)
-	}
+	// Determine project dir — try payload, then derive from skills/title
+	projectDir := detectProjectDir(t)
 
 	// Verify project exists
 	if _, err := os.Stat(projectDir); os.IsNotExist(err) {
-		return Result{Success: false, Error: fmt.Sprintf("project not found: %s", projectDir)}
+		return Result{Success: false, Error: fmt.Sprintf("project directory not found: %s", projectDir)}
 	}
 
-	// Determine command to run
-	command := task.Command
-	if command == "" {
-		command = buildDevCommand(task)
-	}
+	// Build OpenCode prompt from task title + description
+	command := buildDevPrompt(t, projectDir)
+	log.Printf("[dev] Running OpenCode in %s...", projectDir)
 
-	if command == "" {
-		return Result{Success: false, Error: "no command specified and could not build one"}
-	}
-
-	log.Printf("[dev] Running: %s (project=%s, dir=%s)", command, task.Project, projectDir)
-
-	// Run OpenCode
 	stdout, stderr, err := RunOpenCode(command)
 	output := stdout
 	if stderr != "" {
@@ -77,7 +45,6 @@ func devProcessor(payload json.RawMessage) Result {
 		}
 	}
 
-	// Extract useful info from output
 	filesChanged := extractFilesChanged(output)
 	commitHash := extractCommitHash(output)
 
@@ -87,35 +54,56 @@ func devProcessor(payload json.RawMessage) Result {
 		Data: map[string]any{
 			"files_changed": filesChanged,
 			"commit_hash":   commitHash,
-			"project":      task.Project,
+			"project_dir":   projectDir,
+			"task_id":      t.ID,
 		},
 	}
 }
 
-func buildDevCommand(task TaskDPayload) string {
-	// Build OpenCode command based on task type
-	switch task.Type {
-	case "dev_task":
-		return fmt.Sprintf(
-			"Implement Task #%d for project %s at %s. Report back when done using sessions_send.",
-			task.TaskID, task.Project, task.Path,
-		)
-	case "fix":
-		return fmt.Sprintf(
-			"Fix the issue in project %s at %s. Task ID: %d. Report results via sessions_send.",
-			task.Project, task.Path, task.TaskID,
-		)
-	default:
-		return fmt.Sprintf(
-			"Work on %s task for project %s at %s. Report completion to PM.",
-			task.Type, task.Project, task.Path,
-		)
+// detectProjectDir figures out the project path from task metadata.
+func detectProjectDir(t *Task) string {
+	// Try to extract project name from payload
+	if t.Payload != nil {
+		var payload map[string]any
+		if json.Unmarshal(t.Payload, &payload) == nil {
+			if path, ok := payload["path"].(string); ok && path != "" {
+				return path
+			}
+			if project, ok := payload["project"].(string); ok && project != "" {
+				return fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", project)
+			}
+		}
 	}
+
+	// Try to derive from task title (e.g. "Fix auth bug in my-tasks")
+	lower := strings.ToLower(t.Title)
+	for _, name := range []string{"my-tasks", "agenthub", "taskmaster", "ydda", "roastmy"} {
+		if strings.Contains(lower, name) {
+			return fmt.Sprintf("/root/.openclaw/workspace-pm/projects/%s", name)
+		}
+	}
+
+	// Default workspace
+	return "/root/.openclaw/workspace-pm"
+}
+
+// buildDevPrompt builds an OpenCode prompt from task title and description.
+func buildDevPrompt(t *Task, projectDir string) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Task: %s", t.Title))
+	if t.Description != "" {
+		parts = append(parts, fmt.Sprintf("Details: %s", t.Description))
+	}
+	if len(t.Skills) > 0 {
+		parts = append(parts, fmt.Sprintf("Required skills: %s", strings.Join(t.Skills, ", ")))
+	}
+	parts = append(parts, fmt.Sprintf("Project path: %s", projectDir))
+	parts = append(parts, "Work in the project directory. When done, report completion.")
+	return strings.Join(parts, "\n")
 }
 
 func summarizeOutput(output string) string {
 	lines := strings.Split(output, "\n")
-	// Take first 100 lines as summary
 	if len(lines) > 100 {
 		return strings.Join(lines[:100], "\n") + "\n... (truncated)"
 	}
@@ -123,7 +111,6 @@ func summarizeOutput(output string) string {
 }
 
 func extractFilesChanged(output string) []string {
-	// Look for git diff output or file patterns
 	re := regexp.MustCompile(`(?:changed|modified|created):\s*(.+?)(?:\n|$)`)
 	matches := re.FindAllStringSubmatch(output, -1)
 	var files []string
@@ -160,15 +147,4 @@ func RunDevWorker() {
 	if err := worker.Run(); err != nil {
 		log.Fatalf("Dev worker fatal: %v", err)
 	}
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func init() {
-	// Register dev worker as a runnable command
 }

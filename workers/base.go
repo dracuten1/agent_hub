@@ -50,6 +50,22 @@ func (a *API) get(path string) (*http.Response, error) {
 	return a.do(req)
 }
 
+func (a *API) patchJSON(path string, body interface{}) (*http.Response, error) {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal body: %w", err)
+		}
+		rdr = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest("PATCH", a.BaseURL+path, rdr)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	return a.do(req)
+}
+
 func (a *API) postJSON(path string, body interface{}) (*http.Response, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -84,31 +100,14 @@ func (a *API) ReadJSON(res *http.Response, v interface{}) error {
 
 // WorkerFunc is the function signature for a worker processor.
 // It receives the raw payload JSON and returns a result or error.
-type WorkerFunc func(payload json.RawMessage) Result
+type WorkerFunc func(t *Task) Result
 
 // Result is the outcome of a worker's processing.
 type Result struct {
-	Success bool            `json:"success"`
-	Output  string          `json:"output,omitempty"`
-	Error   string          `json:"error,omitempty"`
-	Data    map[string]any  `json:"data,omitempty"`
-}
-
-// TaskPayload represents a polled task payload.
-type TaskPayload struct {
-	Type    string          `json:"type"`
-	Project string          `json:"project"`
-	Path    string          `json:"path"`
-	Command string          `json:"command,omitempty"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-// ReviewPayload represents a polled review payload.
-type ReviewPayload struct {
-	Type    string          `json:"type"`
-	Project string          `json:"project"`
-	PRURL   string          `json:"pr_url,omitempty"`
-	Payload json.RawMessage `json:"payload"`
+	Success bool           `json:"success"`
+	Output  string         `json:"output,omitempty"`
+	Error   string         `json:"error,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
 }
 
 // Worker handles polling and processing for a specific task type.
@@ -145,18 +144,18 @@ func getPollInterval() time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		// Try as seconds
-		if secs, err := fmt.Sscanf(v, "%d", new(int)); secs == 1 && err == nil {
-			var s int
-			fmt.Sscanf(v, "%d", &s)
+		// Try as bare seconds
+		var s int
+		if _, err := fmt.Sscanf(v, "%d", &s); err == nil && s > 0 {
 			return time.Duration(s) * time.Second
 		}
 	}
 	return 10 * time.Second
 }
 
-// Run starts the worker loop with graceful shutdown.
+// Run starts the worker loop with graceful shutdown and heartbeat.
 // On SIGINT/SIGTERM: stops polling, waits for current task, then exits.
+// Sends heartbeat every 5 minutes while running.
 func (w *Worker) Run() error {
 	// Set up signal handling for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -166,7 +165,14 @@ func (w *Worker) Run() error {
 	backoff := w.PollInterval
 	maxBackoff := 5 * time.Minute
 
+	// Heartbeat ticker (every 5 min)
+	heartbeatTick := time.NewTicker(5 * time.Minute)
+	defer heartbeatTick.Stop()
+
 	log.Printf("[%s] Starting worker (poll=%s, path=%s)", w.Name, w.PollInterval, w.PollPath)
+
+	// Send initial heartbeat
+	w.sendHeartbeat("working")
 
 	// Track in-flight task for graceful shutdown
 	var inFlight sync.WaitGroup
@@ -175,10 +181,13 @@ func (w *Worker) Run() error {
 		select {
 		case sig := <-sigCh:
 			log.Printf("[%s] Received %v, shutting down gracefully...", w.Name, sig)
-			// Wait for in-flight task to complete
+			w.sendHeartbeat("stopping")
 			inFlight.Wait()
 			log.Printf("[%s] Shutdown complete", w.Name)
 			return nil
+
+		case <-heartbeatTick.C:
+			w.sendHeartbeat("working")
 
 		default:
 		}
@@ -204,10 +213,10 @@ func (w *Worker) Run() error {
 			continue
 		}
 
-		log.Printf("[%s] Claiming task %d (type=%s, project=%s)", w.Name, task.ID, task.Type, task.Project)
+		log.Printf("[%s] Claiming task %s (title=%s)", w.Name, task.ID, task.Title)
 		claimed, err := w.claim(task.ID)
 		if err != nil || !claimed {
-			log.Printf("[%s] Failed to claim task %d: %v", w.Name, task.ID, err)
+			log.Printf("[%s] Failed to claim task %s: %v", w.Name, task.ID, err)
 			time.Sleep(w.PollInterval)
 			continue
 		}
@@ -215,18 +224,22 @@ func (w *Worker) Run() error {
 		// Mark task as in-flight for graceful shutdown
 		inFlight.Add(1)
 
-		log.Printf("[%s] Processing task %d...", w.Name, task.ID)
-		result := w.Process(task.Payload)
+		log.Printf("[%s] Processing task %s...", w.Name, task.ID)
+
+		// Send progress update: 10%
+		w.reportProgress(task.ID, 10)
+
+		result := w.Process(task)
 
 		if result.Success {
-			log.Printf("[%s] Task %d complete, reporting success", w.Name, task.ID)
+			log.Printf("[%s] Task %s complete, reporting success", w.Name, task.ID)
 			if err := w.reportComplete(task.ID, result); err != nil {
-				log.Printf("[%s] Failed to report complete for task %d: %v", w.Name, task.ID, err)
+				log.Printf("[%s] Failed to report complete for task %s: %v", w.Name, task.ID, err)
 			}
 		} else {
-			log.Printf("[%s] Task %d failed: %s", w.Name, task.ID, result.Error)
+			log.Printf("[%s] Task %s failed: %s", w.Name, task.ID, result.Error)
 			if err := w.reportFail(task.ID, result.Error); err != nil {
-				log.Printf("[%s] Failed to report fail for task %d: %v", w.Name, task.ID, err)
+				log.Printf("[%s] Failed to report fail for task %s: %v", w.Name, task.ID, err)
 			}
 		}
 
@@ -235,6 +248,7 @@ func (w *Worker) Run() error {
 	}
 }
 
+// poll fetches tasks from the queue.
 func (w *Worker) poll() (*Task, error) {
 	res, err := w.API.get(w.PollPath)
 	if err != nil {
@@ -243,28 +257,41 @@ func (w *Worker) poll() (*Task, error) {
 	if res.StatusCode == http.StatusNoContent || res.StatusCode == http.StatusNotFound {
 		return nil, nil // no task
 	}
+	if res.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("unauthorized — check AGENTHUB_TOKEN")
+	}
 	if res.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return nil, fmt.Errorf("poll returned %d: %s", res.StatusCode, string(body))
 	}
 
-	var task Task
-	if err := w.API.ReadJSON(res, &task); err != nil {
+	// The queue endpoint returns {"tasks":[...],"capacity":{...}}
+	var queueResp struct {
+		Tasks []Task `json:"tasks"`
+	}
+	if err := w.API.ReadJSON(res, &queueResp); err != nil {
 		return nil, err
 	}
-	return &task, nil
+	if len(queueResp.Tasks) == 0 {
+		return nil, nil
+	}
+	return &queueResp.Tasks[0], nil
 }
 
-func (w *Worker) claim(id int64) (bool, error) {
-	res, err := w.API.postJSON(fmt.Sprintf(w.ClaimPath, id), nil)
+// claim tries to claim a task by ID.
+func (w *Worker) claim(id string) (bool, error) {
+	res, err := w.API.postJSON(fmt.Sprintf(w.ClaimPath, id), map[string]any{"note": "claimed by worker"})
 	if err != nil {
 		return false, err
 	}
 	if res.StatusCode == http.StatusConflict {
-		return false, nil // already claimed
+		return false, nil // already claimed by another agent
 	}
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode == http.StatusNotFound {
+		return false, fmt.Errorf("task not found")
+	}
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return false, fmt.Errorf("claim returned %d: %s", res.StatusCode, string(body))
@@ -272,61 +299,112 @@ func (w *Worker) claim(id int64) (bool, error) {
 	return true, nil
 }
 
-func (w *Worker) reportComplete(id int64, result Result) error {
+// reportComplete marks a task as done.
+func (w *Worker) reportComplete(id string, result Result) error {
 	body := map[string]any{
-		"success": true,
-		"output":  result.Output,
+		"status": "done",
+		"notes":  result.Output,
 	}
 	if result.Data != nil {
 		body["data"] = result.Data
 	}
-	res, err := w.API.postJSON(fmt.Sprintf("/tasks/%d/complete", id), body)
+	res, err := w.API.postJSON(fmt.Sprintf("/api/agent/tasks/%s/complete", id), body)
 	if err != nil {
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		return fmt.Errorf("complete returned %d", res.StatusCode)
 	}
 	return nil
 }
 
-func (w *Worker) reportFail(id int64, errMsg string) error {
+// reportFail marks a task as failed.
+func (w *Worker) reportFail(id string, errMsg string) error {
 	body := map[string]any{
-		"success": false,
-		"error":   errMsg,
+		"status": "failed",
+		"notes":  errMsg,
 	}
-	res, err := w.API.postJSON(fmt.Sprintf("/tasks/%d/fail", id), body)
+	res, err := w.API.postJSON(fmt.Sprintf("/api/agent/tasks/%s/complete", id), body)
 	if err != nil {
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
 		return fmt.Errorf("fail returned %d", res.StatusCode)
 	}
 	return nil
 }
 
-// Task represents a polled task from the queue.
-type Task struct {
-	ID        int64           `json:"id"`
-	Type      string          `json:"type"`
-	Project   string          `json:"project"`
-	Path      string          `json:"path"`
-	Payload   json.RawMessage `json:"payload"`
-	Status    string          `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
+// reportProgress updates task progress percentage.
+func (w *Worker) reportProgress(id string, pct int) {
+	body := map[string]any{"progress": pct}
+	res, err := w.API.patchJSON(fmt.Sprintf("/api/agent/tasks/%s/progress", id), body)
+	if err != nil {
+		log.Printf("[%s] Failed to report progress for %s: %v", w.Name, id, err)
+		return
+	}
+	res.Body.Close()
 }
 
-// Review represents a polled review from the queue.
-type Review struct {
-	ID        int64           `json:"id"`
-	Type      string          `json:"type"`
-	Project   string          `json:"project"`
-	PRURL     string          `json:"pr_url"`
-	Payload   json.RawMessage `json:"payload"`
-	Status    string          `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
+// reportReview submits a review verdict for a task.
+func (w *Worker) reportReview(id string, verdict string, severity string, issues []string) error {
+	body := map[string]any{
+		"verdict":  verdict,
+		"severity": severity,
+		"issues":   issues,
+	}
+	res, err := w.API.postJSON(fmt.Sprintf("/api/agent/tasks/%s/review", id), body)
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		return fmt.Errorf("review returned %d", res.StatusCode)
+	}
+	return nil
+}
+
+// reportTest submits a test verdict for a task.
+func (w *Worker) reportTest(id string, verdict string, issues []string) error {
+	body := map[string]any{
+		"verdict": verdict,
+		"issues":  issues,
+	}
+	res, err := w.API.postJSON(fmt.Sprintf("/api/agent/tasks/%s/test", id), body)
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		return fmt.Errorf("test returned %d", res.StatusCode)
+	}
+	return nil
+}
+
+// sendHeartbeat sends a heartbeat to the agent hub.
+func (w *Worker) sendHeartbeat(status string) {
+	body := map[string]any{"status": status}
+	res, err := w.API.postJSON("/api/agent/heartbeat", body)
+	if err != nil {
+		log.Printf("[%s] Heartbeat failed: %v", w.Name, err)
+		return
+	}
+	res.Body.Close()
+}
+
+// Task represents a task from the AgentHub queue.
+type Task struct {
+	ID          string          `json:"id"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Priority    string          `json:"priority"`
+	Assignee    string          `json:"assignee"`
+	MatchScore  float64         `json:"match_score"`
+	Skills      []string        `json:"required_skills"`
+	Payload     json.RawMessage `json:"payload"`
+	Status      string          `json:"status"`
+	CreatedAt   string          `json:"created_at"`
 }
 
 // RunOpenCode runs an OpenCode command and returns the output.
@@ -350,6 +428,9 @@ func RunOpenCode(command string) (string, string, error) {
 
 // RunShell runs a shell command and returns output.
 func RunShell(command string, dir string, timeout time.Duration) (string, string, error) {
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -367,7 +448,14 @@ func RunShell(command string, dir string, timeout time.Duration) (string, string
 	return stdout.String(), stderr.String(), err
 }
 
+// getEnv returns an env var or fallback.
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func init() {
-	// Ensure DefaultClient has a timeout
 	http.DefaultClient.Timeout = 30 * time.Second
 }
