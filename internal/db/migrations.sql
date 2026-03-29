@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 002_agents.sql
 CREATE TABLE IF NOT EXISTS agents (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name            VARCHAR(100) UNIQUE NOT NULL,
     role            VARCHAR(50) NOT NULL,
     skills          TEXT[] DEFAULT '{}',
@@ -51,9 +51,9 @@ CREATE TABLE IF NOT EXISTS features (
 
 -- 005_tasks.sql
 CREATE TABLE IF NOT EXISTS tasks (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id      UUID REFERENCES projects(id) ON DELETE SET NULL,
-    feature_id      UUID REFERENCES features(id) ON DELETE SET NULL,
+    id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    project_id      TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    feature_id      TEXT REFERENCES features(id) ON DELETE SET NULL,
     title           VARCHAR(500) NOT NULL,
     description     TEXT DEFAULT '',
     priority        VARCHAR(20) DEFAULT 'medium',
@@ -72,8 +72,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     claimed_at      TIMESTAMP,
     completed_at    TIMESTAMP,
     deadline        TIMESTAMP,
-    created_by      UUID REFERENCES users(id),
-    user_id         UUID REFERENCES users(id),
+    created_by      TEXT REFERENCES users(id),
+    user_id         TEXT REFERENCES users(id),
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW()
 );
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- 006_task_events.sql
 CREATE TABLE IF NOT EXISTS task_events (
     id          BIGSERIAL PRIMARY KEY,
-    task_id     UUID REFERENCES tasks(id) ON DELETE CASCADE,
+    task_id     TEXT REFERENCES tasks(id) ON DELETE CASCADE,
     agent       VARCHAR(100),
     event       VARCHAR(50) NOT NULL,
     from_status VARCHAR(30),
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS task_events (
 -- 007_comments.sql
 CREATE TABLE IF NOT EXISTS comments (
     id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    task_id     UUID REFERENCES tasks(id) ON DELETE CASCADE,
+    task_id     TEXT REFERENCES tasks(id) ON DELETE CASCADE,
     user_id     TEXT REFERENCES users(id),
     agent       VARCHAR(100),
     content     TEXT NOT NULL,

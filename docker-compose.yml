@@ -5,17 +5,18 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: agenthub
-      POSTGRES_PASSWORD: agenthub
+      POSTGRES_PASSWORD: Ag3nThub2026S3cur3
       POSTGRES_DB: agenthub
-    ports:
-      - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - /var/lib/agenthub/pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agenthub"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   api:
     build:
@@ -23,18 +24,17 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8081:8081"
+    env_file: /etc/agenthub/agenthub.env
     environment:
-      DATABASE_URL: postgres://agenthub:agenthub@db:5432/agenthub?sslmode=disable
+      DATABASE_URL: postgres://agenthub:Ag3nThub2026S3cur3@db:5432/agenthub?sslmode=disable
       JWT_SECRET: ${JWT_SECRET}
       PORT: "8081"
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 10s
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
+      interval: 15s
       timeout: 3s
-      retries: 5
-
-volumes:
-  pgdata:
+      retries: 3
