@@ -14,7 +14,7 @@ import (
 
 // NewTestWorker creates a Test worker that polls the task queue.
 func NewTestWorker(api *API) *Worker {
-	return NewWorker("tester", api, "/api/agent/tasks/queue", "/api/agent/tasks/%s/claim", testProcessor)
+	return NewWorker("tester", api, "/api/agent/tasks/queue?task_type=test", "/api/agent/tasks/%s/claim", testProcessor)
 }
 
 func testProcessor(t *Task) Result {

@@ -141,20 +141,40 @@ func (h *Handler) GetQueue(c *gin.Context) {
 		return
 	}
 
-	var taskTypeFilter string
+	// Resolve task_type filter: query param overrides agent role
+	taskTypeParam := c.Query("task_type")
+
 	role := ""
 	if agentRole != nil {
 		role = agentRole.(string)
 	}
-	switch role {
-	case "developer":
-		taskTypeFilter = "'dev', 'general'"
-	case "reviewer":
-		taskTypeFilter = "'review', 'general'"
-	case "tester":
-		taskTypeFilter = "'test', 'general'"
-	default:
-		taskTypeFilter = "'general'"
+
+	// Mapping from role or explicit param to allowed task types
+	var taskTypeFilter string
+	if taskTypeParam != "" {
+		// Explicit filter from caller
+		switch taskTypeParam {
+		case "dev":
+			taskTypeFilter = "'dev', 'general'"
+		case "review":
+			taskTypeFilter = "'review', 'general'"
+		case "test":
+			taskTypeFilter = "'test', 'general'"
+		default:
+			taskTypeFilter = "'general'"
+		}
+	} else {
+		// Fall back to agent role
+		switch role {
+		case "developer":
+			taskTypeFilter = "'dev', 'general'"
+		case "reviewer":
+			taskTypeFilter = "'review', 'general'"
+		case "tester":
+			taskTypeFilter = "'test', 'general'"
+		default:
+			taskTypeFilter = "'general'"
+		}
 	}
 
 	type QueueTask struct {

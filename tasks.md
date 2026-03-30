@@ -2,56 +2,76 @@
 
 ## In Progress
 
-### BUG-1: ph() function breaks for idx >= 10 (CRITICAL)
-- **Files:** `internal/project/handler.go`, `internal/feature/handler.go`
-- **Bug:** `ph()` uses `string(rune('0'+idx))` — overflows at idx=10+ (produces `$:` not `$10`)
-- **Fix:** Use `fmt.Sprintf("$%d", idx)` instead
-- **Assignee:** dev1
+### IMPROVE-1: Remove worker binaries from git (Dev1)
+- **Files:** `.gitignore`, repo cleanup
+- 3 binary files committed: `agenthub-worker`, `ateam-worker`, `worker`
+- Add to .gitignore, `git rm --cached`, verify clean
 
-### BUG-2: No admin user seeded (CRITICAL)
-- **Files:** `internal/auth/handler.go`, `cmd/server/main.go`
-- **Bug:** Only `tuyen` (role=user) exists. `DeleteAgent` requires admin role — impossible to delete agents. API.md says admin/admin123 but user doesn't exist.
-- **Fix:** Add seed logic in main.go to create admin user on startup if none exists
-- **Assignee:** dev2
+### IMPROVE-2: CORS middleware for web dashboard (Dev2)
+- **Files:** `cmd/server/main.go` + new `middleware/cors.go`
+- React frontend needs CORS to call API from browser
+- Add configurable CORS middleware (allow origins from env `CORS_ALLOWED_ORIGINS`, default `*`)
+- Apply to all `/api/` routes
 
-### BUG-3: CompleteTask doesn't decrement agent current_tasks counter (CRITICAL)
-- **File:** `internal/task/handler.go`
-- **Bug:** When task fails, agent's `current_tasks` counter never decrements. Only `TestTask` pass decrements it. Counter leaks over time.
-- **Fix:** Decrement `current_tasks` in `CompleteTask` when status becomes `failed` or `escalated`
-- **Assignee:** dev1
+### IMPROVE-3: Rate limiting middleware (Dev1)
+- **Files:** new `middleware/ratelimit.go`, `cmd/server/main.go`
+- No rate limiting on any endpoint — add token-bucket rate limiter
+- Configurable via env: `RATE_LIMIT_RPM` (requests per minute, default 60)
+- Stricter limits on auth endpoints: 5 req/min
 
-### BUG-4: ReviewTask/TestTask have no assignee authorization (MAJOR)
-- **File:** `internal/task/handler.go`
-- **Bug:** Any agent can review/test any task. `CompleteTask` checks `assignee = $3` but `ReviewTask` and `TestTask` don't.
-- **Fix:** Add `AND assignee = $agentName` check to review/test status transitions
-- **Assignee:** dev2
+### IMPROVE-4: Docker Compose cleanup (Dev2)
+- **Files:** `docker-compose.yml`, `Dockerfile`
+- Remove obsolete `version: '3.8'` key
+- Remove redundant `migrations.sql` copy from Dockerfile (embed handles it)
+- Add `ADMIN_PASSWORD` env var to api service environment
 
-### BUG-5: ocTeam driver can't access AGENTHUB_ADMIN_PASS (MAJOR)
-- **File:** `scripts/octeam-driver.sh`
-- **Bug:** Cron sandbox doesn't inherit `/etc/environment`. Script auth fails silently.
-- **Fix:** Add `[ -f /etc/agenthub/agenthub.env ] && source /etc/agenthub/agenthub.env` at script top
-- **Assignee:** dev1
+### IMPROVE-5: Env var name alignment (Dev2)
+- **Files:** `cmd/server/main.go`, `scripts/octeam-driver.sh`, `.env`, `docker-compose.yml`
+- Code reads `ADMIN_PASSWORD` but docker/env uses `AGENTHUB_ADMIN_PASS`
+- Standardize on `AGENTHUB_ADMIN_PASS` everywhere (it's already in .env and driver script)
+
+### IMPROVE-6: Worker queue role-based filtering (Dev1)
+- **Files:** `internal/agent/handler.go`, `workers/dev.go`, `workers/review.go`, `workers/test.go`
+- All 3 workers poll same `/api/agent/tasks/queue` — reviewer picks up dev tasks
+- Add `task_type` filter param to queue endpoint (already partially done)
+- Workers should send their role when polling
+
+### IMPROVE-7: Redundant COUNT query in admin seed (Dev2)
+- **File:** `cmd/server/main.go`
+- Currently does `SELECT COUNT(*) FROM users WHERE role='admin'` then `INSERT`
+- Replace with single `INSERT ... ON CONFLICT DO NOTHING` (race-safe, one query)
 
 ## Backlog
 
-### IMPROVE-1: Remove worker binaries from git
-- **Files:** `.gitignore`, repo cleanup
-- Binary files `agenthub-worker`, `ateam-worker`, `worker` committed. Add to .gitignore, git rm.
+### IMPROVE-8: Pagination limit cap
+- Reset pagination should cap at 100
 
-### IMPROVE-2: Worker queue filtering by role
-- **Files:** `internal/agent/handler.go`, `workers/*.go`
-- All 3 workers poll same `/api/agent/tasks/queue` — reviewer picks up dev tasks. The endpoint already filters by role via `taskTypeFilter`, but workers all register with the same role-based filter. Verify and fix worker task type matching.
+### IMPROVE-9: Dashboard route rename
+- Minor naming inconsistency
 
-### IMPROVE-3: docker-compose.yml cleanup
-- Remove obsolete `version` key, remove redundant `migrations.sql` copy from Dockerfile
+### IMPROVE-10: Dashboard error handling
+- Add proper error responses
 
-### IMPROVE-4: Rate limiting
-- No rate limiting on any endpoint. Add middleware for auth endpoints.
+### IMPROVE-11: Duplicate anonymous struct
+- DRY refactor in agent handler
 
-### IMPROVE-5: CORS for web dashboard
-- React frontend needs CORS headers to call API from browser
+### IMPROVE-12: TestTask fail path — task slot leak
+- Same as BUG-3 pattern but for test fail
+
+### IMPROVE-13: WebSocket notifications
+- Replace polling with real-time updates
 
 ## Completed
+
+### Bug Fix Sprint (2026-03-30)
+- BUG-1: ph() overflow ✅
+- BUG-2: Admin user seed ✅
+- BUG-3: current_tasks counter leak ✅
+- BUG-4: Review/Test auth checks ✅
+- BUG-5: Driver env loading ✅
+
+### Test Pipeline (2026-03-30)
+- GET /api/hello endpoint ✅ (full cycle: dev → review fail → fix → review pass → test pass → commit)
 
 ### Initial v1.0 (2026-03-29)
 - API server with auth, tasks, agents, projects, features, dashboard, review

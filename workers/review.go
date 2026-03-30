@@ -12,7 +12,7 @@ import (
 
 // NewReviewWorker creates a Review worker that polls the task queue.
 func NewReviewWorker(api *API) *Worker {
-	return NewWorker("reviewer", api, "/api/agent/tasks/queue", "/api/agent/tasks/%s/claim", reviewProcessor)
+	return NewWorker("reviewer", api, "/api/agent/tasks/queue?task_type=review", "/api/agent/tasks/%s/claim", reviewProcessor)
 }
 
 func reviewProcessor(t *Task) Result {

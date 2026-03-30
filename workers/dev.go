@@ -12,7 +12,7 @@ import (
 
 // NewDevWorker creates a Dev worker that polls the shared task queue.
 func NewDevWorker(api *API) *Worker {
-	return NewWorker("dev", api, "/api/agent/tasks/queue", "/api/agent/tasks/%s/claim", devProcessor)
+	return NewWorker("dev", api, "/api/agent/tasks/queue?task_type=dev", "/api/agent/tasks/%s/claim", devProcessor)
 }
 
 func devProcessor(t *Task) Result {

@@ -14,6 +14,7 @@ import (
 	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
+	"github.com/tuyen/agenthub/middleware"
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
@@ -47,30 +48,32 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
-	// Seed admin user if not exists
-	var adminCount int
-	database.Get(&adminCount, "SELECT COUNT(*) FROM users WHERE role = 'admin'")
-	if adminCount == 0 {
-		adminPassword := os.Getenv("ADMIN_PASSWORD")
-		if adminPassword == "" {
-			adminPassword = "admin123"
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
-		if err != nil {
-			log.Fatalf("Failed to hash admin password: %v", err)
-		}
-		_, err = database.Exec(
-			`INSERT INTO users (id, username, email, password_hash, role, created_at)
-			 VALUES (gen_random_uuid(), 'admin', 'admin@agenthub.com', $1, 'admin', NOW())`,
-			string(hash))
-		if err != nil {
-			log.Fatalf("Failed to seed admin user: %v", err)
-		}
-		log.Printf("[Bootstrap] Admin user seeded (password: %s)", adminPassword)
+	// Seed admin user (upsert — no-op if already exists)
+	adminPassword := os.Getenv("AGENTHUB_ADMIN_PASS")
+	if adminPassword == "" {
+		log.Fatal("AGENTHUB_ADMIN_PASS env var is required")
 	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("Failed to hash admin password: %v", err)
+	}
+	_, err = database.Exec(
+		`INSERT INTO users (id, username, email, password, role, created_at)
+		 VALUES (gen_random_uuid(), 'admin', 'admin@agenthub.com', $1, 'admin', NOW())
+		 ON CONFLICT (username) DO NOTHING`,
+		string(hash))
+	if err != nil {
+		log.Fatalf("Failed to seed admin user: %v", err)
+	}
+	log.Println("[Bootstrap] Admin user ready")
 
 	// Router
 	r := gin.Default()
+
+	// Rate limiting
+	r.Use(middleware.RateLimit())
+	// CORS
+	r.Use(middleware.CORS())
 
 	// Middleware
 	authMiddleware := auth.NewMiddleware(jwtSecret)
@@ -86,6 +89,9 @@ func main() {
 	{
 		authHandler := auth.NewHandler(database, jwtSecret)
 		agentHandler := agent.NewHandler(database)
+		public.GET("/hello", func(c *gin.Context) {
+			c.JSON(200, gin.H{"message": "hello from agenthub", "version": "1.1"})
+		})
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
 		public.POST("/agent/register", agentHandler.RegisterAgent)

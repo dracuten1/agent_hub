@@ -12,7 +12,6 @@ RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /app
 COPY --from=builder /agenthub .
-COPY internal/db/migrations.sql /app/migrations.sql
 
 EXPOSE 8081
 
