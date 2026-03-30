@@ -124,13 +124,12 @@ func (h *Handler) Heartbeat(c *gin.Context) {
 
 func (h *Handler) GetQueue(c *gin.Context) {
 	agentName, _ := c.Get("agentName")
+	agentRole, _ := c.Get("agentRole")
 
-	// Get agent info
 	var agentSkills db.StringArray
 	h.db.Get(&agentSkills, "SELECT skills FROM agents WHERE name = $1", agentName)
-	var currentTasks int
+	var currentTasks, maxTasks int
 	h.db.Get(&currentTasks, "SELECT current_tasks FROM agents WHERE name = $1", agentName)
-	var maxTasks int
 	h.db.Get(&maxTasks, "SELECT max_tasks FROM agents WHERE name = $1", agentName)
 
 	if currentTasks >= maxTasks {
@@ -142,11 +141,38 @@ func (h *Handler) GetQueue(c *gin.Context) {
 		return
 	}
 
-	// Get available tasks with skill matching
+	var taskTypeFilter string
+	role := ""
+	if agentRole != nil {
+		role = agentRole.(string)
+	}
+	switch role {
+	case "developer":
+		taskTypeFilter = "'dev', 'general'"
+	case "reviewer":
+		taskTypeFilter = "'review', 'general'"
+	case "tester":
+		taskTypeFilter = "'test', 'general'"
+	default:
+		taskTypeFilter = "'general'"
+	}
+
+	type QueueTask struct {
+		ID             string         `json:"id" db:"id"`
+		Title          string         `json:"title" db:"title"`
+		Description    string         `json:"description" db:"description"`
+		Priority       string         `json:"priority" db:"priority"`
+		RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
+		CreatedAt      string         `json:"created_at" db:"created_at"`
+		TaskType       string         `json:"task_type" db:"task_type"`
+		MatchScore     float64        `json:"match_score"`
+	}
+
+	var tasks []QueueTask
 	rows, err := h.db.Queryx(
-		`SELECT id, title, description, priority, required_skills, created_at
+		`SELECT id, title, description, priority, required_skills, created_at, task_type
 		 FROM tasks
-		 WHERE status = 'available'
+		 WHERE status = 'available' AND task_type IN (`+taskTypeFilter+`)
 		 ORDER BY
 		   CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END,
 		   created_at ASC
@@ -157,19 +183,12 @@ func (h *Handler) GetQueue(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	type QueueTask struct {
-		ID             string         `json:"id" db:"id"`
-		Title          string         `json:"title" db:"title"`
-		Description    string         `json:"description" db:"description"`
-		Priority       string         `json:"priority" db:"priority"`
-		RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
-		MatchScore     float64        `json:"match_score"`
-	}
-
-	var tasks []QueueTask
 	for rows.Next() {
 		var t QueueTask
-		rows.StructScan(&t)
+		if err := rows.StructScan(&t); err != nil {
+			log.Printf("GetQueue: StructScan error: %v", err)
+			continue
+		}
 		t.MatchScore = calculateMatch(agentSkills, t.RequiredSkills)
 		tasks = append(tasks, t)
 	}
@@ -187,6 +206,7 @@ func (h *Handler) ListAgents(c *gin.Context) {
 		        total_completed, total_failed, model, tool
 		 FROM agents ORDER BY name`)
 	if err != nil {
+		log.Printf("[Handler] StructScan error: %v", err)
 		c.JSON(500, gin.H{"error": "Failed to list agents"})
 		return
 	}
@@ -207,6 +227,7 @@ func (h *Handler) GetAgentDetail(c *gin.Context) {
 		return
 	}
 	if err != nil {
+		log.Printf("[Handler] StructScan error: %v", err)
 		c.JSON(500, gin.H{"error": "Failed to get agent"})
 		return
 	}
@@ -238,6 +259,46 @@ func (h *Handler) HealthOverview(c *gin.Context) {
 	})
 }
 
+func (h *Handler) DeleteAgent(c *gin.Context) {
+	name := c.Param("name")
+
+	userRole, _ := c.Get("userRole")
+	if userRole != "admin" {
+		c.JSON(403, gin.H{"error": "Forbidden — admin only"})
+		return
+	}
+
+	tx, err := h.db.Beginx()
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec("DELETE FROM agents WHERE name = $1", name)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to delete agent"})
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		c.JSON(404, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	tx.Exec("UPDATE tasks SET assignee = NULL, status = 'available' WHERE assignee = $1", name)
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": "Failed to commit transaction"})
+		return
+	}
+
+	log.Printf("[Agent] Deleted agent: %s", name)
+
+	c.JSON(200, gin.H{"message": "Agent deleted"})
+}
+
 func (h *Handler) RegisterRoutes(g *gin.RouterGroup) {
 	g.POST("/heartbeat", h.Heartbeat)
 }
@@ -250,6 +311,7 @@ func (h *Handler) RegisterUserRoutes(g *gin.RouterGroup) {
 	g.GET("/agents", h.ListAgents)
 	g.GET("/agents/health", h.HealthOverview)
 	g.GET("/agents/:name", h.GetAgentDetail)
+	g.DELETE("/agents/:name", h.DeleteAgent)
 }
 
 // Health Monitor - runs as goroutine

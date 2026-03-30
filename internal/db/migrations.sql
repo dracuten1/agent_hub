@@ -112,3 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name);
 CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
+
+-- 009_add_task_type.sql
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'general';
+CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type);

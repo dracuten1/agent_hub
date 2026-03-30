@@ -2,6 +2,8 @@ package task
 
 import (
 	"database/sql"
+	"fmt"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -21,6 +23,7 @@ type Task struct {
 	Description    string          `json:"description" db:"description"`
 	Priority       string          `json:"priority" db:"priority"`
 	Status         string          `json:"status" db:"status"`
+	TaskType       string          `json:"task_type" db:"task_type"`
 	Assignee       *string         `json:"assignee" db:"assignee"`
 	RequiredSkills db.StringArray  `json:"required_skills" db:"required_skills"`
 	RetryCount     int             `json:"retry_count" db:"retry_count"`
@@ -51,6 +54,7 @@ type CreateTaskRequest struct {
 	MaxRetries     int      `json:"max_retries"`
 	Deadline       string   `json:"deadline"`
 	Assignee       string   `json:"assignee"`
+	TaskType       string   `json:"task_type" binding:"omitempty,oneof=general dev review test"`
 }
 
 type UpdateTaskRequest struct {
@@ -130,13 +134,18 @@ func (h *Handler) CreateTask(c *gin.Context) {
 		status = "assigned"
 	}
 
+	taskType := "general"
+	if req.TaskType != "" {
+		taskType = req.TaskType
+	}
+
 	_, err := h.db.Exec(
 		`INSERT INTO tasks (id, project_id, feature_id, title, description, priority, status,
-		 assignee, required_skills, max_retries, deadline, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		 assignee, required_skills, max_retries, deadline, created_by, task_type)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		taskID, nilIfEmpty(req.ProjectID), nilIfEmpty(req.FeatureID),
 		req.Title, req.Description, priority, status,
-		assignee, db.StringArray(req.RequiredSkills), maxRetries, nilIfEmpty(req.Deadline), userID,
+		assignee, db.StringArray(req.RequiredSkills), maxRetries, nilIfEmpty(req.Deadline), userID, taskType,
 	)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to create task"})
@@ -160,27 +169,44 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	projectID := c.Query("project_id")
 	assignee := c.Query("assignee")
 
-	query := "SELECT * FROM tasks WHERE 1=1"
+	page, _ := strconv.Atoi(c.Query("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	whereClause := "1=1"
 	args := []interface{}{}
 	argIdx := 1
 
 	if status != "" {
-		query += argPlaceholder(argIdx, "status")
+		whereClause += argPlaceholder(argIdx, "status")
 		args = append(args, status)
 		argIdx++
 	}
 	if projectID != "" {
-		query += " AND project_id = " + placeholder(argIdx)
+		whereClause += " AND project_id = " + placeholder(argIdx)
 		args = append(args, projectID)
 		argIdx++
 	}
 	if assignee != "" {
-		query += " AND assignee = " + placeholder(argIdx)
+		whereClause += " AND assignee = " + placeholder(argIdx)
 		args = append(args, assignee)
 		argIdx++
 	}
 
+	countQuery := "SELECT COUNT(*) FROM tasks WHERE " + whereClause
+	var total int
+	h.db.Get(&total, countQuery, args...)
+
+	query := "SELECT * FROM tasks WHERE " + whereClause
 	query += " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
+	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx + 1)
+	args = append(args, limit, offset)
 
 	var tasks []Task
 	err := h.db.Select(&tasks, query, args...)
@@ -193,7 +219,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		tasks = []Task{}
 	}
 
-	c.JSON(200, gin.H{"tasks": tasks, "total": len(tasks)})
+	c.JSON(200, gin.H{"tasks": tasks, "total": total, "page": page, "limit": limit})
 }
 
 func (h *Handler) GetTask(c *gin.Context) {
@@ -445,6 +471,11 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	}
 	h.logEvent(taskID, agentNameStr, "completed", oldStatus, newStatus, note)
 
+	// If failed/escalated, decrement agent current_tasks counter
+	if newStatus == "failed" || newStatus == "escalated" {
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
+	}
+
 	// If critical severity or max retries, escalate
 	if newStatus == "failed" {
 		var retryCount, maxRetries int
@@ -477,8 +508,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 		_, err := h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
 			 status = 'test', updated_at = NOW()
-			 WHERE id = $1 AND status = 'review'`,
-			taskID)
+			 WHERE id = $1 AND assignee = $2 AND status = 'review'`,
+			taskID, agentNameStr)
 		if err != nil {
 			c.JSON(500, gin.H{"error": "Failed to update review"})
 			return
@@ -500,8 +531,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			h.db.Exec(
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 status = 'escalated', escalated = true, updated_at = NOW()
-				 WHERE id = $3 AND status = 'review'`,
-				severity, db.StringArray(req.Issues), taskID)
+				 WHERE id = $3 AND assignee = $4 AND status = 'review'`,
+				severity, db.StringArray(req.Issues), taskID, agentNameStr)
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "escalated", "Critical issues found: "+joinIssues(req.Issues))
 
 			c.JSON(200, gin.H{"message": "Critical issues found, escalated to PM", "new_status": "escalated"})
@@ -517,8 +548,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 retry_count = CASE WHEN $3 = 'minor' THEN retry_count ELSE retry_count + 1 END,
 				 status = $4, progress = 0, updated_at = NOW()
-				 WHERE id = $5 AND status = 'review'`,
-				severity, db.StringArray(req.Issues), severity, newStatus, taskID)
+				 WHERE id = $5 AND assignee = $6 AND status = 'review'`,
+				severity, db.StringArray(req.Issues), severity, newStatus, taskID, agentNameStr)
 
 			// Check max retries
 			var retryCount, maxRetries int
@@ -554,8 +585,8 @@ func (h *Handler) TestTask(c *gin.Context) {
 		h.db.Exec(
 			`UPDATE tasks SET test_verdict = 'pass', test_issues = '{}',
 			 status = 'deployed', updated_at = NOW()
-			 WHERE id = $1 AND status = 'test'`,
-			taskID)
+			 WHERE id = $1 AND assignee = $2 AND status = 'test'`,
+			taskID, agentNameStr)
 
 		// Update agent stats
 		var assignee string
@@ -575,8 +606,8 @@ func (h *Handler) TestTask(c *gin.Context) {
 		h.db.Exec(
 			`UPDATE tasks SET test_verdict = 'fail', test_issues = $1,
 			 retry_count = retry_count + 1, status = $2, progress = 0, updated_at = NOW()
-			 WHERE id = $3 AND status = 'test'`,
-			db.StringArray(req.Issues), newStatus, taskID)
+			 WHERE id = $3 AND assignee = $4 AND status = 'test'`,
+			db.StringArray(req.Issues), newStatus, taskID, agentNameStr)
 
 		// Check max retries
 		var retryCount, maxRetries int
@@ -634,11 +665,11 @@ func nilIfEmpty(s string) interface{} {
 }
 
 func placeholder(idx int) string {
-	return "$" + string(rune('0'+idx))
+	return fmt.Sprintf("$%d", idx)
 }
 
 func argPlaceholder(idx int, col string) string {
-	return " AND " + col + " = $" + string(rune('0'+idx))
+	return fmt.Sprintf(" AND %s = $%d", col, idx)
 }
 
 func joinIssues(issues []string) string {

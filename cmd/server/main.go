@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/tuyen/agenthub/internal/agent"
 	"github.com/tuyen/agenthub/internal/auth"
 	"github.com/tuyen/agenthub/internal/dashboard"
@@ -44,6 +45,28 @@ func main() {
 	// Run migrations
 	if err := db.RunMigrations(database); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	// Seed admin user if not exists
+	var adminCount int
+	database.Get(&adminCount, "SELECT COUNT(*) FROM users WHERE role = 'admin'")
+	if adminCount == 0 {
+		adminPassword := os.Getenv("ADMIN_PASSWORD")
+		if adminPassword == "" {
+			adminPassword = "admin123"
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("Failed to hash admin password: %v", err)
+		}
+		_, err = database.Exec(
+			`INSERT INTO users (id, username, email, password_hash, role, created_at)
+			 VALUES (gen_random_uuid(), 'admin', 'admin@agenthub.com', $1, 'admin', NOW())`,
+			string(hash))
+		if err != nil {
+			log.Fatalf("Failed to seed admin user: %v", err)
+		}
+		log.Printf("[Bootstrap] Admin user seeded (password: %s)", adminPassword)
 	}
 
 	// Router

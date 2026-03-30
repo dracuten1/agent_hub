@@ -1,6 +1,8 @@
 package review
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/tuyen/agenthub/internal/db"
@@ -28,13 +30,19 @@ func NewHandler(db *sqlx.DB) *Handler {
 func (h *Handler) ListReviewQueue(c *gin.Context) {
 	var tasks []ReviewTask
 
-	h.db.Select(&tasks,
+	err := h.db.Select(&tasks,
 		`SELECT id, title, description, priority, COALESCE(assignee, '') as assignee,
 		        retry_count, required_skills, created_at
 		 FROM tasks WHERE status = 'review'
 		 ORDER BY
 		   CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 END,
 		   created_at ASC`)
+
+	if err != nil {
+		log.Printf("[Handler] StructScan error: %v", err)
+		c.JSON(500, gin.H{"error": "Failed to list review queue"})
+		return
+	}
 
 	if tasks == nil {
 		tasks = []ReviewTask{}

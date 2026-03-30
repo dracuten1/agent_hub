@@ -2,6 +2,9 @@
 # ocTeam Driver — health + task + agent status
 set -euo pipefail
 
+# Load AgentHub secrets
+[ -f /etc/agenthub/agenthub.env ] && set -a && source /etc/agenthub/agenthub.env && set +a
+
 # Load secrets from env
 AGENTHUB_ADMIN_PASS="${AGENTHUB_ADMIN_PASS:-}"
 
@@ -23,7 +26,7 @@ docker ps --filter name=agenthub --format '📦 {{.Names}}: {{.Status}}' 2>/dev/
 # 3. Login + get data
 TOKEN=$(curl -s --max-time 5 -X POST "$API/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username":"tuyen","password":"$AGENTHUB_ADMIN_PASS"}' 2>/dev/null \
+  -d '{"username":"tuyen","password":"'$AGENTHUB_ADMIN_PASS'"}' 2>/dev/null \
   | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
 
 if [ -z "$TOKEN" ]; then

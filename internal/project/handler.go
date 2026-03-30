@@ -2,6 +2,7 @@ package project
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -102,17 +103,17 @@ func (h *Handler) Update(c *gin.Context) {
 	idx := 2
 
 	if req.Name != nil {
-		updates += ", name = $" + ph(idx)
+		updates += ", name = " + ph(idx)
 		args = append(args, *req.Name)
 		idx++
 	}
 	if req.Description != nil {
-		updates += ", description = $" + ph(idx)
+		updates += ", description = " + ph(idx)
 		args = append(args, *req.Description)
 		idx++
 	}
 	if req.Status != nil {
-		updates += ", status = $" + ph(idx)
+		updates += ", status = " + ph(idx)
 		args = append(args, *req.Status)
 		idx++
 	}
@@ -154,5 +155,5 @@ func (h *Handler) RegisterRoutes(g *gin.RouterGroup) {
 }
 
 func ph(idx int) string {
-	return "$" + string(rune('0'+idx))
+	return fmt.Sprintf("$%d", idx)
 }

@@ -1,6 +1,7 @@
 package feature
 
 import (
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -93,17 +94,17 @@ func (h *Handler) Update(c *gin.Context) {
 	idx := 2
 
 	if req.Name != nil {
-		updates += ", name = $" + ph(idx)
+		updates += ", name = $" + fmt.Sprintf("%d", idx)
 		args = append(args, *req.Name)
 		idx++
 	}
 	if req.Description != nil {
-		updates += ", description = $" + ph(idx)
+		updates += ", description = $" + fmt.Sprintf("%d", idx)
 		args = append(args, *req.Description)
 		idx++
 	}
 	if req.Status != nil {
-		updates += ", status = $" + ph(idx)
+		updates += ", status = $" + fmt.Sprintf("%d", idx)
 		args = append(args, *req.Status)
 		idx++
 	}
@@ -141,8 +142,4 @@ func (h *Handler) RegisterRoutes(g *gin.RouterGroup) {
 	g.POST("/features", h.Create)
 	g.PATCH("/features/:id", h.Update)
 	g.DELETE("/features/:id", h.Delete)
-}
-
-func ph(idx int) string {
-	return "$" + string(rune('0'+idx))
 }
