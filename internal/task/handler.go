@@ -13,6 +13,7 @@ import (
 
 var validTransitions = map[string][]string{
 	"available":     {"claimed"},
+	"assigned":      {"claimed"},
 	"orphaned":      {"claimed"},
 	"claimed":       {"in_progress", "available"},
 	"in_progress":   {"done", "review", "needs_fix"},
@@ -201,7 +202,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	if limit < 1 || limit > 100 {
-		limit = 20
+		limit = 100
 	}
 	offset := (page - 1) * limit
 
@@ -543,8 +544,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 		_, err := h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
 			 status = 'test', updated_at = NOW()
-			 WHERE id = $1 AND assignee = $2 AND status = 'review'`,
-			taskID, agentNameStr)
+			 WHERE id = $1 AND status = 'review'`,
+			taskID)
 		if err != nil {
 			c.JSON(500, gin.H{"error": "Failed to update review"})
 			return
@@ -566,8 +567,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			h.db.Exec(
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 status = 'escalated', escalated = true, updated_at = NOW()
-				 WHERE id = $3 AND assignee = $4 AND status = 'review'`,
-				severity, db.StringArray(req.Issues), taskID, agentNameStr)
+				 WHERE id = $3 AND status = 'review'`,
+				severity, db.StringArray(req.Issues), taskID)
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "escalated", "Critical issues found: "+joinIssues(req.Issues))
 
 			c.JSON(200, gin.H{"message": "Critical issues found, escalated to PM", "new_status": "escalated"})
@@ -583,8 +584,8 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 retry_count = CASE WHEN $3 = 'minor' THEN retry_count ELSE retry_count + 1 END,
 				 status = $4, progress = 0, updated_at = NOW()
-				 WHERE id = $5 AND assignee = $6 AND status = 'review'`,
-				severity, db.StringArray(req.Issues), severity, newStatus, taskID, agentNameStr)
+				 WHERE id = $5 AND status = 'review'`,
+				severity, db.StringArray(req.Issues), severity, newStatus, taskID)
 
 			// Check max retries
 			var retryCount, maxRetries int
@@ -624,8 +625,8 @@ func (h *Handler) TestTask(c *gin.Context) {
 		h.db.Exec(
 			`UPDATE tasks SET test_verdict = 'pass', test_issues = '{}',
 			 status = 'deployed', updated_at = NOW()
-			 WHERE id = $1 AND assignee = $2 AND status = 'test'`,
-			taskID, agentNameStr)
+			 WHERE id = $1 AND status = 'test'`,
+			taskID)
 
 		// Update agent stats
 		var assignee string
@@ -645,8 +646,8 @@ func (h *Handler) TestTask(c *gin.Context) {
 		h.db.Exec(
 			`UPDATE tasks SET test_verdict = 'fail', test_issues = $1,
 			 retry_count = retry_count + 1, status = $2, progress = 0, updated_at = NOW()
-			 WHERE id = $3 AND assignee = $4 AND status = 'test'`,
-			db.StringArray(req.Issues), newStatus, taskID, agentNameStr)
+			 WHERE id = $3 AND status = 'test'`,
+			db.StringArray(req.Issues), newStatus, taskID)
 
 		// Decrement agent current_tasks counter
 		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
