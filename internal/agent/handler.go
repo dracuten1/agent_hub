@@ -215,6 +215,7 @@ func (h *Handler) GetQueue(c *gin.Context) {
 
 	c.JSON(200, gin.H{
 		"tasks":    tasks,
+		"total":    len(tasks),
 		"capacity": gin.H{"current": currentTasks, "max": maxTasks},
 	})
 }
@@ -230,8 +231,11 @@ func (h *Handler) ListAgents(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "Failed to list agents"})
 		return
 	}
+	if agents == nil {
+		agents = []Agent{}
+	}
 
-	c.JSON(200, gin.H{"agents": agents})
+	c.JSON(200, gin.H{"agents": agents, "total": len(agents)})
 }
 
 func (h *Handler) GetAgentDetail(c *gin.Context) {
@@ -263,7 +267,7 @@ func (h *Handler) GetAgentDetail(c *gin.Context) {
 		"SELECT id, title, status, progress FROM tasks WHERE assignee = $1 AND status NOT IN ('done', 'deployed', 'cancelled')",
 		name)
 
-	c.JSON(200, gin.H{"agent": agent, "current_tasks": tasks})
+	c.JSON(200, gin.H{"agent": agent, "tasks": tasks, "total": len(tasks)})
 }
 
 func (h *Handler) HealthOverview(c *gin.Context) {

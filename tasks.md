@@ -2,64 +2,40 @@
 
 ## In Progress
 
-### IMPROVE-1: Remove worker binaries from git (Dev1)
-- **Files:** `.gitignore`, repo cleanup
-- 3 binary files committed: `agenthub-worker`, `ateam-worker`, `worker`
-- Add to .gitignore, `git rm --cached`, verify clean
+### Round 2 — Testing
+- Tester validating all 7 improvements (CORS, rate limit, worker filter, cleanup, env, seed, git cleanup)
+- Awaiting results
 
-### IMPROVE-2: CORS middleware for web dashboard (Dev2)
-- **Files:** `cmd/server/main.go` + new `middleware/cors.go`
-- React frontend needs CORS to call API from browser
-- Add configurable CORS middleware (allow origins from env `CORS_ALLOWED_ORIGINS`, default `*`)
-- Apply to all `/api/` routes
+## Next Up (Round 3)
 
-### IMPROVE-3: Rate limiting middleware (Dev1)
-- **Files:** new `middleware/ratelimit.go`, `cmd/server/main.go`
-- No rate limiting on any endpoint — add token-bucket rate limiter
-- Configurable via env: `RATE_LIMIT_RPM` (requests per minute, default 60)
-- Stricter limits on auth endpoints: 5 req/min
+### IMPROVE-8: TestTask fail path — task slot leak (Dev1)
+- `internal/task/handler.go` TestTask method
+- When test fails and task goes back to `needs_fix`, agent's `current_tasks` isn't decremented
+- Same pattern as BUG-3 fix in CompleteTask
 
-### IMPROVE-4: Docker Compose cleanup (Dev2)
-- **Files:** `docker-compose.yml`, `Dockerfile`
-- Remove obsolete `version: '3.8'` key
-- Remove redundant `migrations.sql` copy from Dockerfile (embed handles it)
-- Add `ADMIN_PASSWORD` env var to api service environment
+### IMPROVE-9: Task status machine validation (Dev2)
+- `internal/task/handler.go` — all status transition methods
+- Currently any status can transition to any status via direct API calls
+- Add status machine: only allow valid transitions (available→claimed→in_progress→done→review→test→deployed, or →needs_fix→in_progress, or →failed/escalated)
 
-### IMPROVE-5: Env var name alignment (Dev2)
-- **Files:** `cmd/server/main.go`, `scripts/octeam-driver.sh`, `.env`, `docker-compose.yml`
-- Code reads `ADMIN_PASSWORD` but docker/env uses `AGENTHUB_ADMIN_PASS`
-- Standardize on `AGENTHUB_ADMIN_PASS` everywhere (it's already in .env and driver script)
+### IMPROVE-10: API response standardization (Dev1)
+- All handlers return slightly different error formats
+- Standardize: `{error: string}`, `{task: object}`, `{tasks: array}`, `{agents: array}` etc
+- Add proper HTTP status codes (404 for not found, 403 for forbidden, 400 for bad request)
 
-### IMPROVE-6: Worker queue role-based filtering (Dev1)
-- **Files:** `internal/agent/handler.go`, `workers/dev.go`, `workers/review.go`, `workers/test.go`
-- All 3 workers poll same `/api/agent/tasks/queue` — reviewer picks up dev tasks
-- Add `task_type` filter param to queue endpoint (already partially done)
-- Workers should send their role when polling
+### IMPROVE-11: Request logging middleware (Dev2)
+- New `middleware/logging.go`
+- Log all API requests with: method, path, status, duration, IP
+- Structured JSON logging format
+- Skip health check endpoint to reduce noise
 
-### IMPROVE-7: Redundant COUNT query in admin seed (Dev2)
-- **File:** `cmd/server/main.go`
-- Currently does `SELECT COUNT(*) FROM users WHERE role='admin'` then `INSERT`
-- Replace with single `INSERT ... ON CONFLICT DO NOTHING` (race-safe, one query)
+### IMPROVE-12: Feature GET by ID endpoint (Dev1)
+- `internal/feature/handler.go` — missing `GET /features/:id`
+- Projects have Get by ID but features don't
 
-## Backlog
-
-### IMPROVE-8: Pagination limit cap
-- Reset pagination should cap at 100
-
-### IMPROVE-9: Dashboard route rename
-- Minor naming inconsistency
-
-### IMPROVE-10: Dashboard error handling
-- Add proper error responses
-
-### IMPROVE-11: Duplicate anonymous struct
-- DRY refactor in agent handler
-
-### IMPROVE-12: TestTask fail path — task slot leak
-- Same as BUG-3 pattern but for test fail
-
-### IMPROVE-13: WebSocket notifications
-- Replace polling with real-time updates
+### IMPROVE-13: Pagination limit cap (Dev2)
+- Dev2 added pagination but no max cap
+- Cap at 100 items per page regardless of `?limit=` param
 
 ## Completed
 
@@ -70,12 +46,17 @@
 - BUG-4: Review/Test auth checks ✅
 - BUG-5: Driver env loading ✅
 
+### Improvement Sprint (2026-03-30)
+- IMPROVE-1: Git binary cleanup ✅
+- IMPROVE-2: CORS middleware ✅
+- IMPROVE-3: Rate limiting ✅
+- IMPROVE-4: Docker Compose cleanup ✅
+- IMPROVE-5: Env var alignment ✅
+- IMPROVE-6: Worker queue filtering ✅
+- IMPROVE-7: Seed query simplification ✅
+
 ### Test Pipeline (2026-03-30)
-- GET /api/hello endpoint ✅ (full cycle: dev → review fail → fix → review pass → test pass → commit)
+- GET /api/hello endpoint ✅
 
 ### Initial v1.0 (2026-03-29)
-- API server with auth, tasks, agents, projects, features, dashboard, review
-- Worker framework (dev, review, test)
-- Web dashboard (React/Vite)
-- Docker Compose deployment
-- ocTeam driver script
+- API server, workers, web dashboard, Docker, driver script

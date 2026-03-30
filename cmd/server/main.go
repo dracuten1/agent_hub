@@ -70,6 +70,8 @@ func main() {
 	// Router
 	r := gin.Default()
 
+	// Request logging (first — before any processing)
+	r.Use(middleware.Logging())
 	// Rate limiting
 	r.Use(middleware.RateLimit())
 	// CORS

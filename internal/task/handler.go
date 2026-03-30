@@ -11,6 +11,32 @@ import (
 	"github.com/tuyen/agenthub/internal/db"
 )
 
+var validTransitions = map[string][]string{
+	"available":     {"claimed"},
+	"orphaned":      {"claimed"},
+	"claimed":       {"in_progress", "available"},
+	"in_progress":   {"done", "review", "needs_fix"},
+	"done":          {"review"},
+	"review":        {"test", "needs_fix"},  // escalation handled separately via EscalateTask
+	"needs_fix":     {"in_progress", "claimed", "failed"},
+	"fix_in_progress":{"done", "needs_fix"},
+	"test":          {"deployed", "needs_fix"},
+	"failed":        {"escalated"},
+}
+
+func isValidTransition(from, to string) bool {
+	allowed, ok := validTransitions[from]
+	if !ok {
+		return false
+	}
+	for _, s := range allowed {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
+
 type Handler struct {
 	db *sqlx.DB
 }
@@ -157,7 +183,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 
 	var task Task
 	if err := h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID); err != nil {
-		c.JSON(500, gin.H{"error": "Failed to get created task", "detail": err.Error()})
+		c.JSON(500, gin.H{"error": "Failed to get created task"})
 		return
 	}
 
@@ -380,15 +406,15 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 	agentName, _ := c.Get("agentName")
 	agentNameStr := agentName.(string)
 
-	// Check task is available
+	// Check task is available and transition is valid
 	var status string
 	err := h.db.Get(&status, "SELECT status FROM tasks WHERE id = $1", taskID)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "Task not found"})
 		return
 	}
-	if status != "available" && status != "needs_fix" && status != "orphaned" {
-		c.JSON(409, gin.H{"error": "Task not available for claiming", "current_status": status})
+	if !isValidTransition(status, "claimed") {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to claimed", status)})
 		return
 	}
 
@@ -432,7 +458,7 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 
 	h.logEvent(taskID, agentNameStr, "progress", "", "in_progress", req.Note)
 
-	c.JSON(200, gin.H{"message": "Progress updated", "progress": req.Progress})
+	c.JSON(200, gin.H{"message": "Progress updated", "progress": req.Progress, "new_status": "in_progress"})
 }
 
 func (h *Handler) CompleteTask(c *gin.Context) {
@@ -454,6 +480,11 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		newStatus = "failed"
 	} else if req.Status == "blocked" {
 		newStatus = "escalated"
+	}
+
+	if !isValidTransition(oldStatus, newStatus) {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to %s", oldStatus, newStatus)})
+		return
 	}
 
 	_, err := h.db.Exec(
@@ -504,6 +535,10 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 
 	if req.Verdict == "pass" {
+		if !isValidTransition(oldStatus, "test") {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to test", oldStatus)})
+			return
+		}
 		// Pass → auto to test
 		_, err := h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
@@ -582,6 +617,10 @@ func (h *Handler) TestTask(c *gin.Context) {
 	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 
 	if req.Verdict == "pass" {
+		if !isValidTransition(oldStatus, "deployed") {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to deployed", oldStatus)})
+			return
+		}
 		h.db.Exec(
 			`UPDATE tasks SET test_verdict = 'pass', test_issues = '{}',
 			 status = 'deployed', updated_at = NOW()
@@ -608,6 +647,9 @@ func (h *Handler) TestTask(c *gin.Context) {
 			 retry_count = retry_count + 1, status = $2, progress = 0, updated_at = NOW()
 			 WHERE id = $3 AND assignee = $4 AND status = 'test'`,
 			db.StringArray(req.Issues), newStatus, taskID, agentNameStr)
+
+		// Decrement agent current_tasks counter
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
 
 		// Check max retries
 		var retryCount, maxRetries int

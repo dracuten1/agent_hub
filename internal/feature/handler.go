@@ -1,6 +1,7 @@
 package feature
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,23 @@ func (h *Handler) Create(c *gin.Context) {
 	h.db.Get(&feature, "SELECT * FROM features WHERE id = $1", id)
 
 	c.JSON(201, gin.H{"feature": feature})
+}
+
+func (h *Handler) Get(c *gin.Context) {
+	id := c.Param("id")
+
+	var feature Feature
+	err := h.db.Get(&feature, "SELECT * FROM features WHERE id = $1", id)
+	if err == sql.ErrNoRows {
+		c.JSON(404, gin.H{"error": "Feature not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to get feature"})
+		return
+	}
+
+	c.JSON(200, gin.H{"feature": feature})
 }
 
 func (h *Handler) List(c *gin.Context) {
@@ -139,6 +157,7 @@ func (h *Handler) Delete(c *gin.Context) {
 
 func (h *Handler) RegisterRoutes(g *gin.RouterGroup) {
 	g.GET("/features", h.List)
+	g.GET("/features/:id", h.Get)
 	g.POST("/features", h.Create)
 	g.PATCH("/features/:id", h.Update)
 	g.DELETE("/features/:id", h.Delete)
