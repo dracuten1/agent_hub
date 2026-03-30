@@ -1,72 +1,54 @@
-// Package main is the entry point for the AgentHub worker CLI.
-//
-// Usage:
-//   agenthub-worker dev
-//   agenthub-worker reviewer
-//   agenthub-worker tester
-//
-// Environment variables:
-//   AGENTHUB_URL    API URL (default: http://localhost:8081)
-//   AGENTHUB_TOKEN  Agent API token
-//   DAODUC_API_KEY  OpenCode API key (required for dev/reviewer)
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
+	"flag"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/tuyen/agenthub/workers"
+	"github.com/tuyen/agenthub/internal/worker"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: agenthub-worker <dev|reviewer|tester>")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Environment:")
-		fmt.Fprintln(os.Stderr, "  AGENTHUB_URL    API URL (default: http://localhost:8081)")
-		fmt.Fprintln(os.Stderr, "  AGENTHUB_TOKEN  Agent API token (Bearer)")
-		fmt.Fprintln(os.Stderr, "  DAODUC_API_KEY OpenCode API key (required for dev/reviewer)")
-		os.Exit(1)
+	role := flag.String("role", "dev", "Worker role: dev, review, test")
+	apiURL := flag.String("api", "http://localhost:8081", "AgentHub API URL")
+	opencodePort := flag.Int("opencode-port", 4096, "OpenCode server port")
+	model := flag.String("model", "daoduc/agentic-turbo", "OpenCode model ID")
+	maxIter := flag.Int("max-iterations", 3, "Max fix iterations")
+	pollInterval := flag.Int("poll-interval", 10, "Seconds between queue polls")
+	token := flag.String("token", os.Getenv("AGENT_TOKEN"), "Agent auth token (env: AGENT_TOKEN)")
+	flag.Parse()
+
+	if *token == "" {
+		log.Fatal("AGENT_TOKEN required (env or --token)")
 	}
 
-	subcommand := os.Args[1]
-
-	switch subcommand {
-	case "dev":
-		log.Println("Starting Dev worker...")
-		workers.RunDevWorker()
-	case "reviewer":
-		log.Println("Starting Reviewer worker...")
-		workers.RunReviewWorker()
-	case "tester":
-		log.Println("Starting Tester worker...")
-		workers.RunTestWorker()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", subcommand)
-		fmt.Fprintln(os.Stderr, "Known: dev, reviewer, tester")
-		os.Exit(1)
+	cfg := worker.Config{
+		Role:           *role,
+		TaskType:       *role,
+		APIBaseURL:     *apiURL,
+		OpenCodePort:   *opencodePort,
+		Model:          *model,
+		MaxIterations:  *maxIter,
+		PollInterval:   time.Duration(*pollInterval) * time.Second,
+		AgentToken:     *token,
 	}
-}
+	w := worker.NewWorkerWithConfig(cfg)
 
-// Config represents the optional /etc/agenthub/worker.json config file.
-type Config struct {
-	Name     string   `json:"name"`
-	Role     string   `json:"role"`
-	Skills   []string `json:"skills"`
-	APIKey   string   `json:"api_key"`
-	MaxTasks int      `json:"max_tasks"`
-}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-func readConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("Shutting down worker...")
+		cancel()
+	}()
+
+	log.Printf("Worker starting: role=%s api=%s opencode=%d", *role, *apiURL, *opencodePort)
+	w.Run(ctx)
 }

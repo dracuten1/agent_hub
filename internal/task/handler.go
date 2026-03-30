@@ -15,10 +15,10 @@ var validTransitions = map[string][]string{
 	"available":     {"claimed"},
 	"assigned":      {"claimed"},
 	"orphaned":      {"claimed"},
-	"claimed":       {"in_progress", "available"},
+	"claimed":       {"in_progress", "done", "review", "available"},
 	"in_progress":   {"done", "review", "needs_fix"},
-	"done":          {"review"},
-	"review":        {"test", "needs_fix"},  // escalation handled separately via EscalateTask
+	"done":          {"review", "test"},
+	"review":        {"done", "test", "needs_fix"},
 	"needs_fix":     {"in_progress", "claimed", "failed"},
 	"fix_in_progress":{"done", "needs_fix"},
 	"test":          {"deployed", "needs_fix"},
@@ -428,6 +428,9 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 		return
 	}
 
+	// Increment agent's current_tasks counter
+	h.db.Exec("UPDATE agents SET current_tasks = current_tasks + 1 WHERE name = $1", agentNameStr)
+
 	h.logEvent(taskID, agentNameStr, "claimed", status, "claimed", "Task claimed by agent")
 
 	var task Task
@@ -447,15 +450,21 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 		return
 	}
 
-	// Auto-transition to in_progress
+	// Only update progress for active statuses (don't overwrite done/review/test/failed)
 	_, err := h.db.Exec(
-		`UPDATE tasks SET progress = $1, status = 'in_progress', updated_at = NOW()
-		 WHERE id = $2 AND assignee = $3`,
+		`UPDATE tasks SET progress = $1, updated_at = NOW()
+		 WHERE id = $2 AND assignee = $3 AND status IN ('claimed', 'in_progress', 'needs_fix', 'fix_in_progress')`,
 		req.Progress, taskID, agentNameStr)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to update progress"})
 		return
 	}
+
+	// Auto-transition claimed → in_progress on first progress update
+	h.db.Exec(
+		`UPDATE tasks SET status = 'in_progress', updated_at = NOW()
+		 WHERE id = $1 AND assignee = $2 AND status = 'claimed'`,
+		taskID, agentNameStr)
 
 	h.logEvent(taskID, agentNameStr, "progress", "", "in_progress", req.Note)
 
@@ -476,8 +485,11 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	var oldStatus string
 	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 
-	newStatus := "review" // auto-transition to review
-	if req.Status == "failed" {
+	newStatus := "review" // auto-transition to review for review/test workers
+	if req.Status == "done" {
+		// Dev worker: task is done, PM reviews manually
+		newStatus = "done"
+	} else if req.Status == "failed" {
 		newStatus = "failed"
 	} else if req.Status == "blocked" {
 		newStatus = "escalated"
@@ -544,7 +556,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 		_, err := h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
 			 status = 'test', updated_at = NOW()
-			 WHERE id = $1 AND status = 'review'`,
+			 WHERE id = $1 AND status IN ('review', 'done')`,
 			taskID)
 		if err != nil {
 			c.JSON(500, gin.H{"error": "Failed to update review"})
@@ -567,7 +579,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			h.db.Exec(
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 status = 'escalated', escalated = true, updated_at = NOW()
-				 WHERE id = $3 AND status = 'review'`,
+				 WHERE id = $3 AND status IN ('review', 'done')`,
 				severity, db.StringArray(req.Issues), taskID)
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "escalated", "Critical issues found: "+joinIssues(req.Issues))
 
@@ -584,7 +596,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
 				 retry_count = CASE WHEN $3 = 'minor' THEN retry_count ELSE retry_count + 1 END,
 				 status = $4, progress = 0, updated_at = NOW()
-				 WHERE id = $5 AND status = 'review'`,
+				 WHERE id = $5 AND status IN ('review', 'done')`,
 				severity, db.StringArray(req.Issues), severity, newStatus, taskID)
 
 			// Check max retries
@@ -649,8 +661,13 @@ func (h *Handler) TestTask(c *gin.Context) {
 			 WHERE id = $3 AND status = 'test'`,
 			db.StringArray(req.Issues), newStatus, taskID)
 
-		// Decrement agent current_tasks counter
-		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
+		// Decrement the original assignee's current_tasks counter (not the tester's).
+		// The tester never claimed the task — the assignee (dev) did via ClaimTask.
+		var assignee string
+		h.db.Get(&assignee, "SELECT COALESCE(assignee, '') FROM tasks WHERE id = $1", taskID)
+		if assignee != "" {
+			h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", assignee)
+		}
 
 		// Check max retries
 		var retryCount, maxRetries int

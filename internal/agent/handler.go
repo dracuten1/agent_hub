@@ -127,10 +127,10 @@ func (h *Handler) GetQueue(c *gin.Context) {
 	agentRole, _ := c.Get("agentRole")
 
 	var agentSkills db.StringArray
-	h.db.Get(&agentSkills, "SELECT skills FROM agents WHERE name = $1", agentName)
 	var currentTasks, maxTasks int
-	h.db.Get(&currentTasks, "SELECT current_tasks FROM agents WHERE name = $1", agentName)
-	h.db.Get(&maxTasks, "SELECT max_tasks FROM agents WHERE name = $1", agentName)
+	h.db.QueryRow(
+		"SELECT skills, current_tasks, max_tasks FROM agents WHERE name = $1",
+		agentName).Scan(&agentSkills, &currentTasks, &maxTasks)
 
 	if currentTasks >= maxTasks {
 		c.JSON(200, gin.H{

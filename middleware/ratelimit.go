@@ -110,9 +110,10 @@ func clientIP(c *gin.Context) string {
 	return ip
 }
 
-// isAuthPath returns true for auth-related endpoints.
+// isAuthPath returns true for auth/agent registration endpoints.
 func isAuthPath(path string) bool {
-	return strings.HasPrefix(path, "/api/auth/")
+	return strings.HasPrefix(path, "/api/auth/") ||
+		strings.HasPrefix(path, "/api/agent/register")
 }
 
 // limiterKey includes the RPM tier so auth and general paths get separate buckets.

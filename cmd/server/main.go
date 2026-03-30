@@ -8,16 +8,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
 	"github.com/tuyen/agenthub/internal/agent"
 	"github.com/tuyen/agenthub/internal/auth"
 	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
-	"github.com/tuyen/agenthub/middleware"
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
+	"github.com/tuyen/agenthub/middleware"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -53,19 +53,28 @@ func main() {
 	if adminPassword == "" {
 		log.Fatal("AGENTHUB_ADMIN_PASS env var is required")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
-	if err != nil {
-		log.Fatalf("Failed to hash admin password: %v", err)
+	// Only hash password if admin doesn't exist yet
+	var adminExists int
+	database.Get(&adminExists, "SELECT COUNT(*) FROM users WHERE username = 'admin'")
+	if adminExists == 0 {
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("Failed to hash admin password: %v", err)
+		}
+		_, err = database.Exec(
+			`INSERT INTO users (id, username, email, password, role, created_at)
+			 VALUES (gen_random_uuid(), 'admin', 'admin@agenthub.com', $1, 'admin', NOW())
+			 ON CONFLICT (username) DO NOTHING`,
+			string(hash))
+		if err != nil {
+			log.Fatalf("Failed to seed admin user: %v", err)
+		}
 	}
-	_, err = database.Exec(
-		`INSERT INTO users (id, username, email, password, role, created_at)
-		 VALUES (gen_random_uuid(), 'admin', 'admin@agenthub.com', $1, 'admin', NOW())
-		 ON CONFLICT (username) DO NOTHING`,
-		string(hash))
-	if err != nil {
-		log.Fatalf("Failed to seed admin user: %v", err)
+	if adminExists == 0 {
+		log.Println("[Bootstrap] Admin user created")
+	} else {
+		log.Println("[Bootstrap] Admin user already exists — bcrypt skipped")
 	}
-	log.Println("[Bootstrap] Admin user ready")
 
 	// Router
 	r := gin.Default()
