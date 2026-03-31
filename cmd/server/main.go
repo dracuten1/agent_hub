@@ -18,6 +18,7 @@ import (
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
+	"github.com/tuyen/agenthub/internal/version"
 	"github.com/tuyen/agenthub/internal/websocket"
 	"github.com/tuyen/agenthub/middleware"
 	"golang.org/x/crypto/bcrypt"
@@ -100,6 +101,7 @@ func main() {
 
 	// Health handler (no auth required)
 	healthHandler := health.NewHandler(startTime)
+	versionHandler := version.NewHandler()
 
 	// Public routes (user auth + agent registration + health)
 	public := r.Group("/api")
@@ -110,6 +112,7 @@ func main() {
 			c.JSON(200, gin.H{"message": "hello from agenthub", "version": "1.1"})
 		})
 		public.GET("/health", healthHandler.Health)
+		public.GET("/version", versionHandler.Get)
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
 		public.POST("/agent/register", agentHandler.RegisterAgent)
