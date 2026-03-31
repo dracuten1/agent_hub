@@ -203,13 +203,12 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	status := c.Query("status")
 	projectID := c.Query("project_id")
 	assignee := c.Query("assignee")
-
-	page, _ := strconv.Atoi(c.Query("page"))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if page < 1 {
 		page = 1
 	}
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	if limit < 1 || limit > 100 {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if limit < 1 {
 		limit = 100
 	}
 	offset := (page - 1) * limit

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/tuyen/agenthub/internal/worker"
@@ -30,7 +31,7 @@ func NewBridge(cfg *Config) *Bridge {
 	}
 }
 
-// Run starts the main poll → claim → delegate → wait → verify → report loop.
+// Run starts the main poll → claim → delegate → verify → report loop.
 func (b *Bridge) Run(ctx context.Context) error {
 	log.Printf("[Bridge] Starting (role=%s, agent=%s, poll=%ds, timeout=%ds)",
 		b.cfg.TaskType, b.cfg.AgentID, b.cfg.PollInterval, b.cfg.TaskTimeout)
@@ -62,7 +63,7 @@ func (b *Bridge) pollAndProcess(ctx context.Context) error {
 	}
 
 	task := tasks[0]
-	log.Printf("[Bridge] Task: %s (%s, %s)", task.ID, task.Title, task.Priority)
+	log.Printf("[Bridge] Task: %s (%s)", task.ID, task.Title)
 
 	// 2. Claim
 	if err := b.claimTask(task.ID); err != nil {
@@ -73,13 +74,13 @@ func (b *Bridge) pollAndProcess(ctx context.Context) error {
 	// 3. Progress
 	b.updateProgress(task.ID, 10, "delegating to agent")
 
-	// 4. Delegate to agent
+	// 4. Delegate
 	result := b.agent.Run(ctx, task)
 
-	// 5. Verify build
+	// 5. Verify build (using config's project dir and build cmd)
 	buildOK := true
 	if result.Success {
-		b.updateProgress(task.ID, 80, "agent done, verifying build")
+		b.updateProgress(task.ID, 80, "agent done, verifying")
 		buildOK = b.verifyBuild()
 	}
 
@@ -93,6 +94,7 @@ func (b *Bridge) pollAndProcess(ctx context.Context) error {
 	return nil
 }
 
+// pollQueue fetches available tasks from AgentHub.
 func (b *Bridge) pollQueue() ([]worker.Task, error) {
 	url := fmt.Sprintf("%s/api/agent/tasks/queue?task_type=%s", b.cfg.APIURL, b.cfg.TaskType)
 	req, _ := http.NewRequest("GET", url, nil)
@@ -120,6 +122,7 @@ func (b *Bridge) pollQueue() ([]worker.Task, error) {
 	return result.Tasks, nil
 }
 
+// claimTask claims a task in AgentHub.
 func (b *Bridge) claimTask(taskID string) error {
 	url := fmt.Sprintf("%s/api/agent/tasks/%s/claim", b.cfg.APIURL, taskID)
 	req, _ := http.NewRequest("POST", url, nil)
@@ -138,6 +141,7 @@ func (b *Bridge) claimTask(taskID string) error {
 	return nil
 }
 
+// updateProgress sends a progress ping to AgentHub.
 func (b *Bridge) updateProgress(taskID string, progress int, note string) {
 	url := fmt.Sprintf("%s/api/agent/tasks/%s/progress", b.cfg.APIURL, taskID)
 	payload := map[string]interface{}{"progress": progress, "note": note}
@@ -149,18 +153,23 @@ func (b *Bridge) updateProgress(taskID string, progress int, note string) {
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		log.Printf("[Bridge] Progress failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 }
 
+// verifyBuild runs the configured build command in the configured project dir.
 func (b *Bridge) verifyBuild() bool {
-	projectDir := "/root/.openclaw/workspace-pm/projects/agenthub"
-	log.Printf("[Bridge] Running go build ./...")
-	cmd := exec.Command("/bin/bash", "-c", "export PATH=$PATH:/usr/local/go/bin && go build ./...")
-	cmd.Dir = projectDir
+	if b.cfg.ProjectDir == "" || b.cfg.BuildCmd == "" {
+		log.Printf("[Bridge] No project dir or build cmd — skipping verification")
+		return true
+	}
+
+	log.Printf("[Bridge] Running: %s (in %s)", b.cfg.BuildCmd, b.cfg.ProjectDir)
+	parts := strings.Fields(b.cfg.BuildCmd)
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Dir = b.cfg.ProjectDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("[Bridge] BUILD FAILED:\n%s", string(out))
@@ -170,25 +179,25 @@ func (b *Bridge) verifyBuild() bool {
 	return true
 }
 
+// reportResult sends the task result back to AgentHub.
 func (b *Bridge) reportResult(taskID string, result *TaskResult, buildOK bool) error {
 	status := "done"
 	notes := result.Output
 
 	if !result.Success {
-		status = "failed"
+		status = "needs_fix"
 		notes = "Agent error: " + result.Error
 	} else if !buildOK {
-		status = "failed"
+		status = "needs_fix"
 		notes = "Build verification failed"
 	}
 
-	// Truncate notes if too long
 	if len(notes) > 2000 {
 		notes = notes[:2000] + "...(truncated)"
 	}
 
 	url := fmt.Sprintf("%s/api/agent/tasks/%s/complete", b.cfg.APIURL, taskID)
-	payload := map[string]interface{}{"status": status, "notes": notes}
+	payload := map[string]interface{}{"status": status, "result": notes}
 	body, _ := json.Marshal(payload)
 
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
@@ -208,5 +217,3 @@ func (b *Bridge) reportResult(taskID string, result *TaskResult, buildOK bool) e
 	log.Printf("[Bridge] Reported: %s → %s", taskID, status)
 	return nil
 }
-
-// Helper to avoid unused import

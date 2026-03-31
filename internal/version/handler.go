@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Handler serves version information.
+// Handler returns version info.
 type Handler struct{}
 
 // NewHandler creates a new version handler.
@@ -14,17 +14,10 @@ func NewHandler() *Handler {
 	return &Handler{}
 }
 
-// VersionResponse is the JSON response for GET /api/version.
-type VersionResponse struct {
-	Version string `json:"version"`
-	Build   string `json:"build"`
-}
-
-// Get returns the API version and build information.
-// GET /api/version — no auth required.
+// Get handles GET /api/version — returns version info. No auth required.
 func (h *Handler) Get(c *gin.Context) {
-	c.JSON(http.StatusOK, VersionResponse{
-		Version: "1.0.0",
-		Build:   "dev",
+	c.JSON(http.StatusOK, gin.H{
+		"version": "1.0.0",
+		"build":   "dev",
 	})
 }

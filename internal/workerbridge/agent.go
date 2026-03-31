@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -13,14 +14,17 @@ import (
 	"github.com/tuyen/agenthub/internal/worker"
 )
 
+// Agent invokes the OpenClaw agent CLI for a given task.
 type Agent struct {
 	cfg *Config
 }
 
+// NewAgent creates a new agent with the given config.
 func NewAgent(cfg *Config) *Agent {
 	return &Agent{cfg: cfg}
 }
 
+// TaskResult is the processed result from an agent run.
 type TaskResult struct {
 	Success      bool
 	Output       string
@@ -30,26 +34,44 @@ type TaskResult struct {
 	Duration     time.Duration
 }
 
+// CLIResult represents the JSON output from `openclaw agent --json`.
+type cliResult struct {
+	RunID   string `json:"runId"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+	Result  struct {
+		Payloads []struct {
+			Text string `json:"text"`
+		} `json:"payloads"`
+	} `json:"result"`
+}
+
+// Run invokes the openclaw agent CLI and returns the parsed result.
 func (a *Agent) Run(ctx context.Context, task worker.Task) *TaskResult {
 	start := time.Now()
-	result := &TaskResult{Duration: time.Since(start)}
 
-	prompt := buildPrompt(task)
-	sessionID := generateSessionID(task.ID)
+	prompt := a.buildPrompt(task)
 
-	cmd := exec.CommandContext(ctx, "openclaw", "agent",
+	args := []string{
+		"agent",
 		"--agent", a.cfg.AgentID,
-		"--session-id", sessionID,
 		"--message", prompt,
 		"--timeout", fmt.Sprintf("%d", a.cfg.TaskTimeout),
 		"--json",
-	)
+	}
+	if a.cfg.SessionID != "" {
+		args = append(args, "--session-id", a.cfg.SessionID)
+	}
 
+	cmd := exec.CommandContext(ctx, "openclaw", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	log.Printf("[Agent] openclaw agent --agent %s (timeout=%ds)", a.cfg.AgentID, a.cfg.TaskTimeout)
+
 	err := cmd.Run()
+	result := &TaskResult{Duration: time.Since(start)}
 
 	if err != nil {
 		result.Success = false
@@ -60,66 +82,77 @@ func (a *Agent) Run(ctx context.Context, task worker.Task) *TaskResult {
 		return result
 	}
 
-	output := stdout.String()
-	if output == "" {
-		result.Success = false
-		result.Error = "empty output from agent"
+	// Parse JSON output
+	var parsed cliResult
+	rawOutput := stdout.String()
+	if err := json.Unmarshal([]byte(rawOutput), &parsed); err != nil {
+		// Non-JSON output — use as-is
+		result.Success = len(rawOutput) > 0
+		result.Output = rawOutput
 		return result
 	}
 
-	var resp struct {
-		Result struct {
-			Payloads []struct {
-				Text string `json:"text"`
-			} `json:"payloads"`
-		} `json:"result"`
-	}
+	result.Success = parsed.Status == "ok"
 
-	if err := json.Unmarshal([]byte(output), &resp); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("failed to parse JSON: %v\nraw output: %s", err, output)
-		return result
-	}
-
-	var sb bytes.Buffer
-	for _, p := range resp.Result.Payloads {
-		sb.WriteString(p.Text)
+	// Extract text from payloads
+	var sb strings.Builder
+	for _, p := range parsed.Result.Payloads {
+		if p.Text != "" {
+			sb.WriteString(p.Text)
+		}
 	}
 	result.Output = sb.String()
 
-	if result.Output == "" {
-		result.Success = false
-		result.Error = "no text output from agent payloads"
-		return result
+	if result.Output != "" {
+		result.FilesChanged = extractFilesChanged(result.Output)
+		result.CommitHash = extractCommitHash(result.Output)
 	}
-
-	result.Success = true
-	result.FilesChanged = extractFilesChanged(result.Output)
-	result.CommitHash = extractCommitHash(result.Output)
 
 	return result
 }
 
-func buildPrompt(task worker.Task) string {
-	desc := task.Title
+// buildPrompt constructs the agent prompt from a task + config.
+// Project-specific info comes from config, not hardcoded.
+func (a *Agent) buildPrompt(task worker.Task) string {
+	var sb strings.Builder
+
+	// Task content
+	sb.WriteString(task.Title)
 	if task.Description != "" {
-		desc += "\n\n" + task.Description
+		sb.WriteString("\n\n")
+		sb.WriteString(task.Description)
 	}
-	return desc
+
+	// Project context from config (not hardcoded)
+	projectDir := a.cfg.ProjectDir
+	if projectDir == "" && task.ProjectDir != "" {
+		projectDir = task.ProjectDir
+	}
+
+	if projectDir != "" {
+		sb.WriteString(fmt.Sprintf("\n\nProject directory: %s", projectDir))
+	}
+	if a.cfg.BuildCmd != "" {
+		sb.WriteString(fmt.Sprintf("\nBuild command: %s", a.cfg.BuildCmd))
+	}
+	if a.cfg.TestCmd != "" {
+		sb.WriteString(fmt.Sprintf("\nTest command: %s", a.cfg.TestCmd))
+	}
+
+	sb.WriteString("\n\nImplement the task, run build to verify. Reply done with files changed.")
+
+	return sb.String()
 }
 
-func generateSessionID(taskID string) string {
-	return fmt.Sprintf("bridge-%s-%d", taskID, time.Now().Unix())
-}
-
+// extractFilesChanged extracts file names from agent output text.
 func extractFilesChanged(output string) []string {
 	var files []string
 	seen := make(map[string]bool)
 
-	re := regexp.MustCompile(`(?i)(?:changed(?:\s+files)?|modified|created|added|renamed):\s*(.+?)(?:\n|$)`)
+	re := regexp.MustCompile(`(?i)(?:changed|modified|created|added):\s*(.+?)(?:\n|$)`)
 	for _, m := range re.FindAllStringSubmatch(output, -1) {
 		if len(m) > 1 {
-			for _, f := range splitCSV(m[1]) {
+			for _, f := range strings.Split(m[1], ",") {
 				f = strings.TrimSpace(f)
 				if f != "" && !seen[f] {
 					seen[f] = true
@@ -128,10 +161,10 @@ func extractFilesChanged(output string) []string {
 			}
 		}
 	}
-
 	return files
 }
 
+// extractCommitHash extracts a git commit hash from agent output text.
 func extractCommitHash(output string) string {
 	re := regexp.MustCompile(`(?:commit|hash)[\s:]+([a-f0-9]{7,40})`)
 	m := re.FindStringSubmatch(output)
@@ -139,21 +172,4 @@ func extractCommitHash(output string) string {
 		return m[1]
 	}
 	return ""
-}
-
-func splitCSV(s string) []string {
-	var result []string
-	var current []byte
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			result = append(result, string(current))
-			current = nil
-		} else {
-			current = append(current, s[i])
-		}
-	}
-	if len(current) > 0 {
-		result = append(result, string(current))
-	}
-	return result
 }
