@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -157,6 +158,11 @@ func main() {
 
 	// Start health monitor
 	go agent.StartHealthMonitor(database, 5*time.Minute)
+
+	// Start stale task monitor
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go task.StartStaleTaskMonitor(ctx, database, wsHub)
 
 	log.Printf("AgentHub starting on :%s", port)
 	if err := r.Run(":" + port); err != nil {

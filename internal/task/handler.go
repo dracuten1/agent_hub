@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -57,22 +58,25 @@ type Task struct {
 	TaskType       string         `json:"task_type" db:"task_type"`
 	Assignee       *string        `json:"assignee" db:"assignee"`
 	RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
-	RetryCount     int            `json:"retry_count" db:"retry_count"`
-	MaxRetries     int            `json:"max_retries" db:"max_retries"`
-	Progress       int            `json:"progress" db:"progress"`
-	ReviewVerdict  *string        `json:"review_verdict" db:"review_verdict"`
-	ReviewSeverity *string        `json:"review_severity" db:"review_severity"`
-	ReviewIssues   db.StringArray `json:"review_issues" db:"review_issues"`
-	TestVerdict    *string        `json:"test_verdict" db:"test_verdict"`
-	TestIssues     db.StringArray `json:"test_issues" db:"test_issues"`
-	Escalated      bool           `json:"escalated" db:"escalated"`
-	ClaimedAt      *string        `json:"claimed_at" db:"claimed_at"`
-	CompletedAt    *string        `json:"completed_at" db:"completed_at"`
-	Deadline       *string        `json:"deadline" db:"deadline"`
-	CreatedBy      *string        `json:"created_by" db:"created_by"`
-	UserID         *string        `json:"user_id" db:"user_id"`
-	CreatedAt      string         `json:"created_at" db:"created_at"`
-	UpdatedAt      string         `json:"updated_at" db:"updated_at"`
+	RetryCount        int            `json:"retry_count" db:"retry_count"`
+	MaxRetries        int            `json:"max_retries" db:"max_retries"`
+	ReleaseCount      int            `json:"release_count" db:"release_count"`
+	Progress          int            `json:"progress" db:"progress"`
+	ReviewVerdict     *string        `json:"review_verdict" db:"review_verdict"`
+	ReviewSeverity    *string        `json:"review_severity" db:"review_severity"`
+	ReviewIssues      db.StringArray `json:"review_issues" db:"review_issues"`
+	TestVerdict       *string        `json:"test_verdict" db:"test_verdict"`
+	TestIssues        db.StringArray `json:"test_issues" db:"test_issues"`
+	Escalated         bool           `json:"escalated" db:"escalated"`
+	ClaimedAt         *string        `json:"claimed_at" db:"claimed_at"`
+	CompletedAt       *string        `json:"completed_at" db:"completed_at"`
+	Deadline          *string        `json:"deadline" db:"deadline"`
+	CreatedBy         *string        `json:"created_by" db:"created_by"`
+	UserID            *string        `json:"user_id" db:"user_id"`
+	CreatedAt         string         `json:"created_at" db:"created_at"`
+	UpdatedAt         string         `json:"updated_at" db:"updated_at"`
+	StaleReason       string         `json:"stale_reason,omitempty" db:"-"`
+	StaleDurationMinutes int         `json:"stale_duration_minutes,omitempty" db:"-"`
 }
 
 type CreateTaskRequest struct {
@@ -246,12 +250,27 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		argIdx++
 	}
 
+	stale := c.DefaultQuery("stale", "") == "true"
+	if stale {
+		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
+		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
+		whereClause += " AND (status = 'available' OR (status = 'claimed' AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval AND updated_at < NOW() - ($" + placeholder(argIdx+1) + " || ' minutes')::interval))"
+		args = append(args, claimTimeout, progressTimeout)
+		argIdx += 2
+	}
+
 	countQuery := "SELECT COUNT(*) FROM tasks WHERE " + whereClause
 	var total int
 	h.db.Get(&total, countQuery, args...)
 
-	query := "SELECT * FROM tasks WHERE " + whereClause
-	query += " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
+	var orderBy string
+	if stale {
+		orderBy = " ORDER BY stale = true, claimed_at ASC"
+	} else {
+		orderBy = " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
+	}
+
+	query := "SELECT * FROM tasks WHERE " + whereClause + orderBy
 	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx+1)
 	args = append(args, limit, offset)
 
@@ -264,6 +283,18 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	if tasks == nil {
 		tasks = []Task{}
+	}
+
+	if stale {
+		for i := range tasks {
+			tasks[i].StaleReason = "no_progress"
+			if tasks[i].ClaimedAt != nil {
+				claimedAt, err := time.Parse(time.RFC3339, *tasks[i].ClaimedAt)
+				if err == nil {
+					tasks[i].StaleDurationMinutes = int(time.Since(claimedAt).Minutes())
+				}
+			}
+		}
 	}
 
 	c.JSON(200, gin.H{"tasks": tasks, "total": total, "page": page, "limit": limit})
@@ -413,6 +444,13 @@ func (h *Handler) ReassignTask(c *gin.Context) {
 		return
 	}
 
+	if oldAssignee != nil {
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *oldAssignee)
+	}
+
+	// Increment new agent's capacity counter
+	h.db.Exec("UPDATE agents SET current_tasks = current_tasks + 1 WHERE name = $1", req.Agent)
+
 	h.logEvent(id, agentNameStr, "reassigned", "", "available", req.Reason)
 
 	c.JSON(200, gin.H{"message": "Task reassigned to " + req.Agent})
@@ -432,6 +470,74 @@ func (h *Handler) EscalateTask(c *gin.Context) {
 	h.broadcastTaskEvent(id, "task_updated", "", "escalated")
 
 	c.JSON(200, gin.H{"message": "Task escalated to PM"})
+}
+
+func (h *Handler) ReleaseTask(c *gin.Context) {
+	taskID := c.Param("id")
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	c.ShouldBindJSON(&req)
+
+	var status string
+	var assignee *string
+	var retryCount, maxRetries int
+	err := h.db.QueryRow(
+		"SELECT status, assignee, retry_count, max_retries FROM tasks WHERE id = $1",
+		taskID,
+	).Scan(&status, &assignee, &retryCount, &maxRetries)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Task not found"})
+		return
+	}
+
+	releasable := map[string]bool{"claimed": true, "in_progress": true, "orphaned": true}
+	if !releasable[status] {
+		c.JSON(400, gin.H{
+			"error":                "Task cannot be released",
+			"current_status":       status,
+			"releasable_statuses":  []string{"claimed", "in_progress", "orphaned"},
+		})
+		return
+	}
+
+	if retryCount >= maxRetries {
+		h.db.Exec("UPDATE tasks SET status = 'escalated', escalated = true, updated_at = NOW() WHERE id = $1", taskID)
+		if assignee != nil {
+			h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *assignee)
+		}
+		h.logEvent(taskID, "pm", "escalated", status, "escalated", "Max retries exceeded, task escalated")
+		h.broadcastTaskEvent(taskID, "task_updated", status, "escalated")
+		c.JSON(200, gin.H{"message": "Task escalated (max retries exceeded)", "new_status": "escalated"})
+		return
+	}
+
+	note := "Task released by PM"
+	if req.Reason != "" {
+		note += ": " + req.Reason
+	}
+
+	_, err = h.db.Exec(
+		"UPDATE tasks SET status = 'available', assignee = NULL, retry_count = retry_count + 1, release_count = release_count + 1, claimed_at = NULL, updated_at = NOW() WHERE id = $1",
+		taskID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to release task"})
+		return
+	}
+
+	if assignee != nil {
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *assignee)
+	}
+
+	h.logEvent(taskID, "pm", "released", status, "available", note)
+	h.broadcastTaskEvent(taskID, "task_updated", status, "available")
+
+	var task Task
+	h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID)
+
+	c.JSON(200, gin.H{"message": "Task released", "task": task, "previous_assignee": assignee})
 }
 
 // --- AGENT ROUTES ---
@@ -764,6 +870,7 @@ func (h *Handler) RegisterUserRoutes(g *gin.RouterGroup) {
 	g.DELETE("/tasks/:id", h.DeleteTask)
 	g.POST("/tasks/:id/reassign", h.ReassignTask)
 	g.POST("/tasks/:id/escalate", h.EscalateTask)
+	g.POST("/tasks/:id/release", h.ReleaseTask)
 }
 
 func (h *Handler) RegisterAgentRoutes(g *gin.RouterGroup) {
@@ -833,4 +940,13 @@ func joinIssues(issues []string) string {
 		result += "; " + i
 	}
 	return result
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
 }

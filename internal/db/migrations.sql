@@ -116,3 +116,9 @@ CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
 -- 009_add_task_type.sql
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'general';
 CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type);
+
+-- 010_stale_task_indexes.sql
+CREATE INDEX IF NOT EXISTS idx_tasks_stale_check
+  ON tasks (status, claimed_at, updated_at)
+  WHERE status IN ('claimed', 'in_progress');
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS release_count INT DEFAULT 0;
