@@ -20,7 +20,7 @@ var validTransitions = map[string][]string{
 	"assigned":        {"claimed"},
 	"orphaned":        {"claimed"},
 	"claimed":         {"in_progress", "done", "review", "available"},
-	"in_progress":     {"done", "review", "needs_fix"},
+	"in_progress":     {"done", "review", "needs_fix", "failed"},
 	"done":            {"review", "test", "needs_fix", "escalated"},
 	"review":          {"done", "test", "needs_fix"},
 	"needs_fix":       {"in_progress", "claimed", "failed"},
@@ -107,7 +107,7 @@ type ClaimRequest struct {
 }
 
 type CompleteRequest struct {
-	Status string   `json:"status" binding:"required,oneof=done failed blocked"`
+	Status string   `json:"status" binding:"required,oneof=done failed blocked needs_fix"`
 	Files  []string `json:"files_changed"`
 	Branch string   `json:"branch"`
 	Notes  string   `json:"notes"`

@@ -185,10 +185,10 @@ func (b *Bridge) reportResult(taskID string, result *TaskResult, buildOK bool) e
 	notes := result.Output
 
 	if !result.Success {
-		status = "needs_fix"
+		status = "failed"
 		notes = "Agent error: " + result.Error
 	} else if !buildOK {
-		status = "needs_fix"
+		status = "failed"
 		notes = "Build verification failed"
 	}
 
@@ -197,7 +197,7 @@ func (b *Bridge) reportResult(taskID string, result *TaskResult, buildOK bool) e
 	}
 
 	url := fmt.Sprintf("%s/api/agent/tasks/%s/complete", b.cfg.APIURL, taskID)
-	payload := map[string]interface{}{"status": status, "result": notes}
+	payload := map[string]interface{}{"status": status, "notes": notes}
 	body, _ := json.Marshal(payload)
 
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
