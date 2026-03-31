@@ -16,6 +16,7 @@ import (
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
 	"github.com/tuyen/agenthub/internal/health"
+	"github.com/tuyen/agenthub/internal/ping"
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
@@ -101,6 +102,7 @@ func main() {
 	wsHandler := websocket.NewHandler(wsHub)
 
 	// Health handler (no auth required)
+	pingHandler := ping.NewHandler()
 	healthHandler := health.NewHandler(startTime)
 	versionHandler := version.NewHandler()
 
@@ -113,6 +115,7 @@ func main() {
 			c.JSON(200, gin.H{"message": "hello from agenthub", "version": "1.1"})
 		})
 		public.GET("/health", healthHandler.Health)
+		public.GET("/ping", pingHandler.Get)
 		public.GET("/version", versionHandler.Get)
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
