@@ -135,10 +135,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 				{
 					Info: &MessageInfo{
 						ID: "msg_inflight", SessionID: "ses_inflight", Role: "assistant",
-						Time: &MessageTimeInfo{Created: now.Add(-1*time.Second).UnixMilli(), Completed: now.UnixMilli()},
+						Time: &MessageTimeInfo{Created: now.Add(-1 * time.Second).UnixMilli(), Completed: now.UnixMilli()},
 					},
 					Parts: []MessagePart{{Type: "text", Text: "Hello from assistant"}},
-					ID:   "msg_inflight",
+					ID:    "msg_inflight",
 				},
 			})
 

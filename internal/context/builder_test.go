@@ -250,9 +250,9 @@ func TestRunBuildCmdFails(t *testing.T) {
 
 func TestExtractReadmeIntro(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		contains string
+		name        string
+		input       string
+		contains    string
 		notContains string
 	}{
 		{
@@ -261,8 +261,8 @@ func TestExtractReadmeIntro(t *testing.T) {
 			contains: "Intro line",
 		},
 		{
-			name:     "h1 not treated as h2",
-			input:    "# Project Title\n\n## Section One\n\nExtra content",
+			name:        "h1 not treated as h2",
+			input:       "# Project Title\n\n## Section One\n\nExtra content",
 			contains:    "# Project Title",
 			notContains: "# Project Title\n\n## Section One",
 		},

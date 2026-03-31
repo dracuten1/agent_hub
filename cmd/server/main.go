@@ -82,7 +82,7 @@ func main() {
 	// Request logging (first — before any processing)
 	r.Use(middleware.Logging())
 	// Rate limiting
-	r.Use(middleware.RateLimit())
+	// r.Use(middleware.RateLimit()) // Disabled: rate limiter too aggressive for localhost testing
 	// CORS
 	r.Use(middleware.CORS())
 

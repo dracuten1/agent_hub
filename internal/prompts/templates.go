@@ -2,10 +2,10 @@ package prompts
 
 // ProjectConfig holds project-specific configuration for prompts.
 type ProjectConfig struct {
-	BuildCmd   string
-	TestCmd    string
-	Framework  string
-	Language   string
+	BuildCmd  string
+	TestCmd   string
+	Framework string
+	Language  string
 }
 
 // DefaultConfig returns a sensible default config for a Go project.

@@ -28,9 +28,9 @@ func NewHandler(db *sqlx.DB) *Handler {
 
 // dashboardStats holds all stats for the dashboard response.
 type dashboardStats struct {
-	Tasks   gin.H `json:"tasks"`
-	Agents  gin.H `json:"agents"`
-	Events  []DashboardEvent `json:"recent_events"`
+	Tasks  gin.H            `json:"tasks"`
+	Agents gin.H            `json:"agents"`
+	Events []DashboardEvent `json:"recent_events"`
 }
 
 func (h *Handler) Get(c *gin.Context) {

@@ -27,14 +27,14 @@ func main() {
 	}
 
 	cfg := worker.Config{
-		Role:           *role,
-		TaskType:       *role,
-		APIBaseURL:     *apiURL,
-		OpenCodePort:   *opencodePort,
-		Model:          *model,
-		MaxIterations:  *maxIter,
-		PollInterval:   time.Duration(*pollInterval) * time.Second,
-		AgentToken:     *token,
+		Role:          *role,
+		TaskType:      *role,
+		APIBaseURL:    *apiURL,
+		OpenCodePort:  *opencodePort,
+		Model:         *model,
+		MaxIterations: *maxIter,
+		PollInterval:  time.Duration(*pollInterval) * time.Second,
+		AgentToken:    *token,
 	}
 	w := worker.NewWorkerWithConfig(cfg)
 

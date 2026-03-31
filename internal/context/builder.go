@@ -14,14 +14,14 @@ import (
 
 // TaskContext holds all input needed to build a rich context prompt.
 type TaskContext struct {
-	Title          string
-	Description    string
-	ProjectDir     string
-	Branch         string
-	AffectedFiles  []string
-	Constraints    []string // files NOT to modify
-	BuildCmd       string
-	TestCmd        string
+	Title         string
+	Description   string
+	ProjectDir    string
+	Branch        string
+	AffectedFiles []string
+	Constraints   []string // files NOT to modify
+	BuildCmd      string
+	TestCmd       string
 }
 
 // BuildContext assembles a rich context prompt for OpenCode from a TaskContext.

@@ -12,17 +12,17 @@ import (
 )
 
 var validTransitions = map[string][]string{
-	"available":     {"claimed"},
-	"assigned":      {"claimed"},
-	"orphaned":      {"claimed"},
-	"claimed":       {"in_progress", "done", "review", "available"},
-	"in_progress":   {"done", "review", "needs_fix"},
-	"done":          {"review", "test"},
-	"review":        {"done", "test", "needs_fix"},
-	"needs_fix":     {"in_progress", "claimed", "failed"},
-	"fix_in_progress":{"done", "needs_fix"},
-	"test":          {"deployed", "needs_fix"},
-	"failed":        {"escalated"},
+	"available":       {"claimed"},
+	"assigned":        {"claimed"},
+	"orphaned":        {"claimed"},
+	"claimed":         {"in_progress", "done", "review", "available"},
+	"in_progress":     {"done", "review", "needs_fix"},
+	"done":            {"review", "test", "needs_fix", "escalated"},
+	"review":          {"done", "test", "needs_fix"},
+	"needs_fix":       {"in_progress", "claimed", "failed"},
+	"fix_in_progress": {"done", "needs_fix"},
+	"test":            {"deployed", "needs_fix"},
+	"failed":          {"escalated"},
 }
 
 func isValidTransition(from, to string) bool {
@@ -43,32 +43,32 @@ type Handler struct {
 }
 
 type Task struct {
-	ID             string          `json:"id" db:"id"`
-	ProjectID      *string         `json:"project_id" db:"project_id"`
-	FeatureID      *string         `json:"feature_id" db:"feature_id"`
-	Title          string          `json:"title" db:"title"`
-	Description    string          `json:"description" db:"description"`
-	Priority       string          `json:"priority" db:"priority"`
-	Status         string          `json:"status" db:"status"`
-	TaskType       string          `json:"task_type" db:"task_type"`
-	Assignee       *string         `json:"assignee" db:"assignee"`
-	RequiredSkills db.StringArray  `json:"required_skills" db:"required_skills"`
-	RetryCount     int             `json:"retry_count" db:"retry_count"`
-	MaxRetries     int             `json:"max_retries" db:"max_retries"`
-	Progress       int             `json:"progress" db:"progress"`
-	ReviewVerdict  *string         `json:"review_verdict" db:"review_verdict"`
-	ReviewSeverity *string         `json:"review_severity" db:"review_severity"`
-	ReviewIssues   db.StringArray  `json:"review_issues" db:"review_issues"`
-	TestVerdict    *string         `json:"test_verdict" db:"test_verdict"`
-	TestIssues     db.StringArray  `json:"test_issues" db:"test_issues"`
-	Escalated      bool            `json:"escalated" db:"escalated"`
-	ClaimedAt      *string         `json:"claimed_at" db:"claimed_at"`
-	CompletedAt    *string         `json:"completed_at" db:"completed_at"`
-	Deadline       *string         `json:"deadline" db:"deadline"`
-	CreatedBy      *string         `json:"created_by" db:"created_by"`
-	UserID         *string         `json:"user_id" db:"user_id"`
-	CreatedAt      string          `json:"created_at" db:"created_at"`
-	UpdatedAt      string          `json:"updated_at" db:"updated_at"`
+	ID             string         `json:"id" db:"id"`
+	ProjectID      *string        `json:"project_id" db:"project_id"`
+	FeatureID      *string        `json:"feature_id" db:"feature_id"`
+	Title          string         `json:"title" db:"title"`
+	Description    string         `json:"description" db:"description"`
+	Priority       string         `json:"priority" db:"priority"`
+	Status         string         `json:"status" db:"status"`
+	TaskType       string         `json:"task_type" db:"task_type"`
+	Assignee       *string        `json:"assignee" db:"assignee"`
+	RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
+	RetryCount     int            `json:"retry_count" db:"retry_count"`
+	MaxRetries     int            `json:"max_retries" db:"max_retries"`
+	Progress       int            `json:"progress" db:"progress"`
+	ReviewVerdict  *string        `json:"review_verdict" db:"review_verdict"`
+	ReviewSeverity *string        `json:"review_severity" db:"review_severity"`
+	ReviewIssues   db.StringArray `json:"review_issues" db:"review_issues"`
+	TestVerdict    *string        `json:"test_verdict" db:"test_verdict"`
+	TestIssues     db.StringArray `json:"test_issues" db:"test_issues"`
+	Escalated      bool           `json:"escalated" db:"escalated"`
+	ClaimedAt      *string        `json:"claimed_at" db:"claimed_at"`
+	CompletedAt    *string        `json:"completed_at" db:"completed_at"`
+	Deadline       *string        `json:"deadline" db:"deadline"`
+	CreatedBy      *string        `json:"created_by" db:"created_by"`
+	UserID         *string        `json:"user_id" db:"user_id"`
+	CreatedAt      string         `json:"created_at" db:"created_at"`
+	UpdatedAt      string         `json:"updated_at" db:"updated_at"`
 }
 
 type CreateTaskRequest struct {
@@ -124,7 +124,7 @@ type ProgressRequest struct {
 }
 
 type ReassignRequest struct {
-	Agent string `json:"agent" binding:"required"`
+	Agent  string `json:"agent" binding:"required"`
 	Reason string `json:"reason"`
 }
 
@@ -232,7 +232,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	query := "SELECT * FROM tasks WHERE " + whereClause
 	query += " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
-	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx + 1)
+	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx+1)
 	args = append(args, limit, offset)
 
 	var tasks []Task
@@ -342,6 +342,18 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 
 func (h *Handler) DeleteTask(c *gin.Context) {
 	id := c.Param("id")
+
+	// Decrement assignee's current_tasks if task is in an active (non-terminal) state.
+	var assignee *string
+	var status string
+	h.db.Get(&assignee, "SELECT assignee FROM tasks WHERE id = $1", id)
+	h.db.Get(&status, "SELECT status FROM tasks WHERE id = $1", id)
+	if assignee != nil && status != "" {
+		terminal := map[string]bool{"deployed": true, "failed": true, "escalated": true}
+		if !terminal[status] {
+			h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *assignee)
+		}
+	}
 
 	result, err := h.db.Exec("DELETE FROM tasks WHERE id = $1", id)
 	if err != nil {
@@ -575,6 +587,10 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 		}
 
 		if severity == "critical" {
+			if !isValidTransition(oldStatus, "escalated") {
+				c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s for review (escalated)", oldStatus)})
+				return
+			}
 			// Critical → immediate escalation
 			h.db.Exec(
 				`UPDATE tasks SET review_verdict = 'fail', review_severity = $1, review_issues = $2,
@@ -582,10 +598,13 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 				 WHERE id = $3 AND status IN ('review', 'done')`,
 				severity, db.StringArray(req.Issues), taskID)
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "escalated", "Critical issues found: "+joinIssues(req.Issues))
-
 			c.JSON(200, gin.H{"message": "Critical issues found, escalated to PM", "new_status": "escalated"})
 
 		} else {
+			if !isValidTransition(oldStatus, "needs_fix") && !isValidTransition(oldStatus, "fix_in_progress") {
+				c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s for review (back to dev)", oldStatus)})
+				return
+			}
 			// Major/Minor → back to dev
 			newStatus := "needs_fix"
 			if severity == "minor" {
@@ -651,8 +670,11 @@ func (h *Handler) TestTask(c *gin.Context) {
 		c.JSON(200, gin.H{"message": "Tests passed, task deployed", "new_status": "deployed"})
 
 	} else {
-		severity := "major"
-		_ = severity // test severity noted
+		// Fail
+		if !isValidTransition(oldStatus, "needs_fix") && !isValidTransition(oldStatus, "fix_in_progress") {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s for test fail", oldStatus)})
+			return
+		}
 		newStatus := "needs_fix"
 
 		h.db.Exec(

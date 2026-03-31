@@ -55,7 +55,7 @@ func devProcessor(t *Task) Result {
 			"files_changed": filesChanged,
 			"commit_hash":   commitHash,
 			"project_dir":   projectDir,
-			"task_id":      t.ID,
+			"task_id":       t.ID,
 		},
 	}
 }

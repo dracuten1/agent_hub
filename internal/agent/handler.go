@@ -16,35 +16,35 @@ type Handler struct {
 }
 
 type Agent struct {
-	ID             string          `json:"id" db:"id"`
-	Name           string          `json:"name" db:"name"`
-	Role           string          `json:"role" db:"role"`
-	Skills         db.StringArray  `json:"skills" db:"skills"`
-	Status         string          `json:"status" db:"status"`
-	LastHeartbeat  *string         `json:"last_heartbeat" db:"last_heartbeat"`
-	CurrentTasks   int             `json:"current_tasks" db:"current_tasks"`
-	MaxTasks       int             `json:"max_tasks" db:"max_tasks"`
-	TotalCompleted int             `json:"total_completed" db:"total_completed"`
-	TotalFailed    int             `json:"total_failed" db:"total_failed"`
-	Model          *string         `json:"model" db:"model"`
-	Tool           *string         `json:"tool" db:"tool"`
-	APIKey         string          `json:"-" db:"api_key"`
+	ID             string         `json:"id" db:"id"`
+	Name           string         `json:"name" db:"name"`
+	Role           string         `json:"role" db:"role"`
+	Skills         db.StringArray `json:"skills" db:"skills"`
+	Status         string         `json:"status" db:"status"`
+	LastHeartbeat  *string        `json:"last_heartbeat" db:"last_heartbeat"`
+	CurrentTasks   int            `json:"current_tasks" db:"current_tasks"`
+	MaxTasks       int            `json:"max_tasks" db:"max_tasks"`
+	TotalCompleted int            `json:"total_completed" db:"total_completed"`
+	TotalFailed    int            `json:"total_failed" db:"total_failed"`
+	Model          *string        `json:"model" db:"model"`
+	Tool           *string        `json:"tool" db:"tool"`
+	APIKey         string         `json:"-" db:"api_key"`
 }
 
 type RegisterRequest struct {
-	Name   string   `json:"name" binding:"required"`
-	Role   string   `json:"role" binding:"required,oneof=developer reviewer tester"`
-	Skills []string `json:"skills"`
-	MaxTasks int    `json:"max_tasks"`
-	Model  string   `json:"model"`
-	Tool   string   `json:"tool"`
+	Name     string   `json:"name" binding:"required"`
+	Role     string   `json:"role" binding:"required,oneof=developer reviewer tester"`
+	Skills   []string `json:"skills"`
+	MaxTasks int      `json:"max_tasks"`
+	Model    string   `json:"model"`
+	Tool     string   `json:"tool"`
 }
 
 type HeartbeatRequest struct {
-	Status      string `json:"status" binding:"required,oneof=idle working error"`
+	Status      string   `json:"status" binding:"required,oneof=idle working error"`
 	ActiveTasks []string `json:"active_tasks"`
-	Model       string `json:"model"`
-	Tool        string `json:"tool"`
+	Model       string   `json:"model"`
+	Tool        string   `json:"tool"`
 }
 
 func NewHandler(db *sqlx.DB) *Handler {
@@ -192,7 +192,7 @@ func (h *Handler) GetQueue(c *gin.Context) {
 	rows, err := h.db.Queryx(
 		`SELECT id, title, description, priority, required_skills, created_at, task_type
 		 FROM tasks
-		 WHERE status = 'available' AND task_type IN (`+taskTypeFilter+`)
+		 WHERE status = 'available' AND task_type IN (` + taskTypeFilter + `)
 		 ORDER BY
 		   CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END,
 		   created_at ASC

@@ -45,19 +45,19 @@ type MessagePart struct {
 
 // MessageInfo holds metadata about a message exchange.
 type MessageInfo struct {
-	ID         string            `json:"id"`
-	SessionID  string            `json:"sessionID"`
-	Role       string            `json:"role"`
-	ParentID   string            `json:"parentID,omitempty"`
-	ModelID    string            `json:"modelID,omitempty"`
-	ProviderID string            `json:"providerID,omitempty"`
-	Mode       string            `json:"mode,omitempty"`
-	Agent      string            `json:"agent,omitempty"`
-	Error      *MessageError     `json:"error,omitempty"`
-	Path       *MessagePath       `json:"path,omitempty"`
-	Cost       float64           `json:"cost,omitempty"`
-	Tokens     *MessageTokens     `json:"tokens,omitempty"`
-	Time       *MessageTimeInfo   `json:"time,omitempty"`
+	ID         string           `json:"id"`
+	SessionID  string           `json:"sessionID"`
+	Role       string           `json:"role"`
+	ParentID   string           `json:"parentID,omitempty"`
+	ModelID    string           `json:"modelID,omitempty"`
+	ProviderID string           `json:"providerID,omitempty"`
+	Mode       string           `json:"mode,omitempty"`
+	Agent      string           `json:"agent,omitempty"`
+	Error      *MessageError    `json:"error,omitempty"`
+	Path       *MessagePath     `json:"path,omitempty"`
+	Cost       float64          `json:"cost,omitempty"`
+	Tokens     *MessageTokens   `json:"tokens,omitempty"`
+	Time       *MessageTimeInfo `json:"time,omitempty"`
 }
 
 // MessageTimeInfo holds timing for a message exchange.
@@ -68,10 +68,10 @@ type MessageTimeInfo struct {
 
 // MessageTokens holds token usage for a message.
 type MessageTokens struct {
-	Input    int             `json:"input"`
-	Output   int             `json:"output"`
-	Reasoning int            `json:"reasoning"`
-	Cache    *MessageCache   `json:"cache,omitempty"`
+	Input     int           `json:"input"`
+	Output    int           `json:"output"`
+	Reasoning int           `json:"reasoning"`
+	Cache     *MessageCache `json:"cache,omitempty"`
 }
 
 // MessageCache holds cache read/write token counts.
@@ -88,25 +88,25 @@ type MessagePath struct {
 
 // MessageError holds error info when a message exchange fails.
 type MessageError struct {
-	Name string         `json:"name"`
+	Name string            `json:"name"`
 	Data *MessageErrorData `json:"data,omitempty"`
 }
 
 // MessageErrorData holds the underlying error from the LLM provider.
 type MessageErrorData struct {
-	Message        string `json:"message"`
-	StatusCode     int    `json:"statusCode"`
-	IsRetryable    bool   `json:"isRetryable"`
-	ResponseBody   string `json:"responseBody,omitempty"`
-	MetadataURL string `json:"metadataURL,omitempty"`
+	Message      string `json:"message"`
+	StatusCode   int    `json:"statusCode"`
+	IsRetryable  bool   `json:"isRetryable"`
+	ResponseBody string `json:"responseBody,omitempty"`
+	MetadataURL  string `json:"metadataURL,omitempty"`
 }
 
 // MessageResponse is the response from POST /session/:id/message.
 type MessageResponse struct {
-	Info      *MessageInfo    `json:"info,omitempty"`
-	Parts     []MessagePart   `json:"parts"`
-	ID        string          `json:"id"`
-	SessionID string          `json:"sessionID"`
+	Info      *MessageInfo  `json:"info,omitempty"`
+	Parts     []MessagePart `json:"parts"`
+	ID        string        `json:"id"`
+	SessionID string        `json:"sessionID"`
 }
 
 // HealthResponse is the response from GET /global/health.

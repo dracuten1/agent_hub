@@ -16,9 +16,9 @@ import (
 var ErrTimeout = errors.New("timeout waiting for result")
 
 const (
-	defaultPort     = 4096
+	defaultPort    = 4096
 	pollInterval   = 2 * time.Second
-	defaultTimeout  = 10 * time.Minute
+	defaultTimeout = 10 * time.Minute
 	maxRetries     = 3
 	retryBaseDelay = 100 * time.Millisecond
 )

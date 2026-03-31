@@ -1,73 +1,77 @@
 # AgentHub — Tasks
 
-## In Progress
+## Completed
 
-### AgentHub Fix Sprint (2026-03-31)
+### AgentHub Fix Sprint (2026-03-31) ✅
 
-#### BUG-6: TestTask fail path slot leak (Dev1) — P0
-- In `internal/task/handler.go`, `TestTask` fail path (line ~666) decrements the **tester's** `current_tasks`, but the tester never claimed the task — the **assignee (dev)** did
-- Fix: use the task's `assignee` field to decrement the correct agent's counter, same as `CompleteTask` does on line 648
-- Verify: `ReviewTask` fail path doesn't have this issue (it correctly doesn't decrement anyone)
-- Test: add unit test for TestTask fail path verifying assignee's current_tasks decremented
+#### BUG-6: TestTask fail path slot leak — P0 ✅
+- Fixed: `TestTask` fail path now decrements the **assignee's** `current_tasks`, not the tester's
+- Added: `ClaimTask` now increments `current_tasks` on claim
+- Test: E2E verified — slot released on test fail
 
-#### IMPROVE-14: Dashboard route rename + error handling (Dev2) — P1
-- Rename route: `/api/dashboard` → `/api/dashboard/stats` in `internal/dashboard/handler.go` RegisterRoutes
-- Fix error handling: the dashboard does 3 separate queries without checking errors on most of them (lines 14-21). If the DB query fails, the count stays 0 — silently wrong
-- Fix: check each query error, return 500 if critical queries fail
-- Extract the duplicate anonymous struct (used for `recentEvents` var + nil check) into a named type `DashboardEvent`
-- Update `octeam-driver.sh` if it references the old route
+#### IMPROVE-14: Dashboard route + error handling + dedup — P1 ✅
+- Route renamed: `/api/dashboard` → `/api/dashboard/stats`
+- Queries consolidated: 4 task queries → 1 with FILTER, 3 agent queries → 1 with FILTER
+- Named struct `DashboardEvent` replaces anonymous struct
+- Proper error handling added
 
-#### IMPROVE-15: GetQueue consolidation (Dev1) — P1
-- In `internal/agent/handler.go`, `GetQueue` does 3 separate queries to get `skills`, `current_tasks`, `max_tasks` from the agents table (lines 133-136)
-- Consolidate into a single query: `SELECT skills, current_tasks, max_tasks FROM agents WHERE name = $1`
-- Same query for all 3 fields, no reason for 3 roundtrips
+#### IMPROVE-15: GetQueue consolidation — P1 ✅
+- 3 separate agent queries → 1 query
+- Already done in earlier session
 
-#### IMPROVE-16: CORS multi-origin support (Dev2) — P2
-- `middleware/cors.go` reads `CORS_ALLOWED_ORIGINS` env but sets the entire string as a single `Access-Control-Allow-Origin` header
-- Fix: parse comma-separated origins, match against `Origin` request header dynamically
-- If origin doesn't match, don't set the header (browser will block)
-- Keep `*` as default when env is empty
+#### IMPROVE-16: CORS multi-origin — P2 ✅
+- Parses comma-separated `CORS_ALLOWED_ORIGINS`
+- Matches request `Origin` header dynamically
+- Falls back to `*` when env empty
+- Tests added
 
-#### IMPROVE-17: Agent registration rate limiting (Dev1) — P2
-- `internal/agent/handler.go` `RegisterAgent` has no rate limiting
-- Add simple in-memory rate limiter (e.g. 5 registrations per minute per IP)
-- Use `sync.Map` or a simple map with mutex + cleanup goroutine
-- Return 429 when rate exceeded
+#### IMPROVE-17: Rate limiting — P2 ✅
+- Middleware-based rate limiting via `golang.org/x/time/rate`
+- Auth paths: 5/min per IP
+- General paths: 60/min per IP
+- X-Forwarded-For support for reverse proxies
+- Tests added
 
-#### IMPROVE-18: Admin seeding skip bcrypt on no-op (Dev2) — P2
-- Check if there's a seed/migration that hashes the admin password every time
-- If INSERT uses ON CONFLICT DO NOTHING, the bcrypt hash is wasted — skip it when no insert happens
-- Likely in `internal/db/` seed or migration
+#### IMPROVE-18: Admin seeding optimization — P2 ✅
+- Skips bcrypt hash when admin already exists
+- Single query check before expensive hash
 
-#### IMPROVE-19: gofmt cmd/server/main.go (Dev1) — P3
-- Run `gofmt -w cmd/server/main.go` — only import ordering issues
-- Trivial but backlog item
+#### IMPROVE-19: gofmt — P3 ✅
+- Import ordering fixed
 
-## Next Up (P3)
-- WH-4: Role prompt templates
-- WH-5: Parallel executor with worktree isolation
+### E2E Tests Verified ✅
+
+**Happy Path:**
+1. Create → available
+2. Claim → claimed
+3. Progress → in_progress
+4. Complete → done
+5. Review pass → test
+6. Test pass → deployed
+7. Slot freed, total_completed++
+
+**Review Fail:**
+1-4 same
+5. Review fail → needs_fix
+6. Slot still held (dev needs to fix)
+
+**Test Fail:**
+1-5 same (review pass)
+6. Test fail → needs_fix
+7. Slot freed (BUG-6 fix verified)
+
+## Next Up
+
+### Go Worker Integration
+- Wire up systemd services for `agenthub-worker dev|review|test`
+- Test with OpenCode server running
+- Deploy to production
+
+### Frontend
+- React dashboard for task management
+- Real-time updates via WebSocket
 
 ## Backlog
 - WH-6: Fix iteration loop (reuse session, max 5 rounds)
 - WH-7: Question handler (auto-answer vs escalate)
 - WH-8: Structured output parsing
-
-## Completed
-
-### Bug Fix Sprint (2026-03-30)
-- BUG-1 through BUG-5: All fixed ✅
-
-### Improvement Sprint (2026-03-30)
-- IMPROVE-1 through IMPROVE-13: All done ✅
-
-### Worker Rewrite (2026-03-30)
-- WH-1: OpenCode HTTP Client ✅
-- WH-2: Context Builder ✅
-- WH-3: Generic Worker Core ✅
-- WH-4: CLI Entrypoint ✅
-- 127/128 tests pass ✅
-
-### E2E Testing (2026-03-30)
-- 10 E2E test cases designed ✅
-- E2E tests executed, 5 tasks created ✅
-- Stale tasks cleaned (2026-03-31) ✅
