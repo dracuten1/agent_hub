@@ -652,7 +652,8 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	}
 
 	_, err = h.db.Exec(
-		`UPDATE tasks SET status = $1, progress = 100, completed_at = NOW(), updated_at = NOW()
+		`UPDATE tasks SET status = $1, progress = 100, completed_at = NOW(), updated_at = NOW(),
+		 assignee = NULL
 		 WHERE id = $2 AND assignee = $3`,
 		newStatus, taskID, agentNameStr)
 	if err != nil {
