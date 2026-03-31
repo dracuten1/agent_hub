@@ -10,9 +10,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/tuyen/agenthub/internal/agent"
+	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/auth"
 	"github.com/tuyen/agenthub/internal/comment"
-	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
 	"github.com/tuyen/agenthub/internal/health"
@@ -119,6 +119,12 @@ func main() {
 		public.GET("/version", versionHandler.Get)
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
+		// Dashboard (no auth — internal tool)
+		dashboardHandler := dashboard.NewHandler(database)
+		public.GET("/dashboard/summary", dashboardHandler.Summary)
+		public.GET("/dashboard/agents", dashboardHandler.Agents)
+		public.GET("/dashboard/tasks", dashboardHandler.Tasks)
+		r.GET("/dashboard", dashboardHandler.Page)
 		public.POST("/agent/register", agentHandler.RegisterAgent)
 		public.GET("/ws", wsHandler.HandleWS)
 	}
@@ -147,7 +153,6 @@ func main() {
 		featureHandler := feature.NewHandler(database)
 		taskHandler := task.NewHandler(database, wsHub)
 		reviewHandler := review.NewHandler(database)
-		dashboardHandler := dashboard.NewHandler(database)
 		agentHandler := agent.NewHandler(database)
 
 		projectHandler.RegisterRoutes(user)
@@ -155,7 +160,6 @@ func main() {
 		taskHandler.RegisterUserRoutes(user)
 		commentHandler.RegisterUserRoutes(user)
 		reviewHandler.RegisterRoutes(user)
-		dashboardHandler.RegisterRoutes(user)
 		agentHandler.RegisterUserRoutes(user)
 	}
 
