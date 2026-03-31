@@ -540,7 +540,7 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		return
 	}
 
-	_, _ = h.db.Exec(
+	_, err = h.db.Exec(
 		`UPDATE tasks SET status = $1, progress = 100, completed_at = NOW(), updated_at = NOW()
 		 WHERE id = $2 AND assignee = $3`,
 		newStatus, taskID, agentNameStr)
@@ -596,7 +596,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			return
 		}
 		// Pass → auto to test
-		_, _ = h.db.Exec(
+		_, err = h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
 			 status = 'test', updated_at = NOW()
 			 WHERE id = $1 AND status IN ('review', 'done')`,
