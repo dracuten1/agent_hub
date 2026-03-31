@@ -254,9 +254,13 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	if stale {
 		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
 		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
-		whereClause += " AND (status = 'available' OR (status = 'claimed' AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval AND updated_at < NOW() - ($" + placeholder(argIdx+1) + " || ' minutes')::interval))"
-		args = append(args, claimTimeout, progressTimeout)
-		argIdx += 2
+		whereClause += " AND status IN ('claimed', 'in_progress') AND claimed_at IS NOT NULL"
+		whereClause += " AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
+		args = append(args, claimTimeout)
+		argIdx++
+		whereClause += " AND updated_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
+		args = append(args, progressTimeout)
+		argIdx++
 	}
 
 	countQuery := "SELECT COUNT(*) FROM tasks WHERE " + whereClause
@@ -265,7 +269,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	var orderBy string
 	if stale {
-		orderBy = " ORDER BY stale = true, claimed_at ASC"
+		orderBy = " ORDER BY claimed_at ASC NULLS LAST"
 	} else {
 		orderBy = " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
 	}
@@ -447,9 +451,6 @@ func (h *Handler) ReassignTask(c *gin.Context) {
 	if oldAssignee != nil {
 		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *oldAssignee)
 	}
-
-	// Increment new agent's capacity counter
-	h.db.Exec("UPDATE agents SET current_tasks = current_tasks + 1 WHERE name = $1", req.Agent)
 
 	h.logEvent(id, agentNameStr, "reassigned", "", "available", req.Reason)
 
