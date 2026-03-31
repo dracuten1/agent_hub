@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
 	"time"
 
@@ -57,22 +59,25 @@ type Task struct {
 	TaskType       string         `json:"task_type" db:"task_type"`
 	Assignee       *string        `json:"assignee" db:"assignee"`
 	RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
-	RetryCount     int            `json:"retry_count" db:"retry_count"`
-	MaxRetries     int            `json:"max_retries" db:"max_retries"`
-	Progress       int            `json:"progress" db:"progress"`
-	ReviewVerdict  *string        `json:"review_verdict" db:"review_verdict"`
-	ReviewSeverity *string        `json:"review_severity" db:"review_severity"`
-	ReviewIssues   db.StringArray `json:"review_issues" db:"review_issues"`
-	TestVerdict    *string        `json:"test_verdict" db:"test_verdict"`
-	TestIssues     db.StringArray `json:"test_issues" db:"test_issues"`
-	Escalated      bool           `json:"escalated" db:"escalated"`
-	ClaimedAt      *string        `json:"claimed_at" db:"claimed_at"`
-	CompletedAt    *string        `json:"completed_at" db:"completed_at"`
-	Deadline       *string        `json:"deadline" db:"deadline"`
-	CreatedBy      *string        `json:"created_by" db:"created_by"`
-	UserID         *string        `json:"user_id" db:"user_id"`
-	CreatedAt      string         `json:"created_at" db:"created_at"`
-	UpdatedAt      string         `json:"updated_at" db:"updated_at"`
+	RetryCount        int            `json:"retry_count" db:"retry_count"`
+	MaxRetries        int            `json:"max_retries" db:"max_retries"`
+	ReleaseCount      int            `json:"release_count" db:"release_count"`
+	Progress          int            `json:"progress" db:"progress"`
+	ReviewVerdict     *string        `json:"review_verdict" db:"review_verdict"`
+	ReviewSeverity    *string        `json:"review_severity" db:"review_severity"`
+	ReviewIssues      db.StringArray `json:"review_issues" db:"review_issues"`
+	TestVerdict       *string        `json:"test_verdict" db:"test_verdict"`
+	TestIssues        db.StringArray `json:"test_issues" db:"test_issues"`
+	Escalated         bool           `json:"escalated" db:"escalated"`
+	ClaimedAt         *string        `json:"claimed_at" db:"claimed_at"`
+	CompletedAt       *string        `json:"completed_at" db:"completed_at"`
+	Deadline          *string        `json:"deadline" db:"deadline"`
+	CreatedBy         *string        `json:"created_by" db:"created_by"`
+	UserID            *string        `json:"user_id" db:"user_id"`
+	CreatedAt         string         `json:"created_at" db:"created_at"`
+	UpdatedAt         string         `json:"updated_at" db:"updated_at"`
+	StaleReason       string         `json:"stale_reason,omitempty" db:"-"`
+	StaleDurationMinutes int         `json:"stale_duration_minutes,omitempty" db:"-"`
 }
 
 type CreateTaskRequest struct {
@@ -246,6 +251,20 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		argIdx++
 	}
 
+	stale := c.Query("stale")
+	if stale == "true" {
+		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
+		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
+		whereClause += " AND status IN ('claimed', 'in_progress')"
+		whereClause += " AND claimed_at IS NOT NULL"
+		whereClause += " AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
+		args = append(args, claimTimeout)
+		argIdx++
+		whereClause += " AND updated_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
+		args = append(args, progressTimeout)
+		argIdx++
+	}
+
 	countQuery := "SELECT COUNT(*) FROM tasks WHERE " + whereClause
 	var total int
 	h.db.Get(&total, countQuery, args...)
@@ -264,6 +283,18 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	if tasks == nil {
 		tasks = []Task{}
+	}
+
+	if stale == "true" {
+		for i := range tasks {
+			tasks[i].StaleReason = "no_progress"
+			if tasks[i].ClaimedAt != nil {
+				claimedAt, err := time.Parse(time.RFC3339, *tasks[i].ClaimedAt)
+				if err == nil {
+					tasks[i].StaleDurationMinutes = int(time.Since(claimedAt).Minutes())
+				}
+			}
+		}
 	}
 
 	c.JSON(200, gin.H{"tasks": tasks, "total": total, "page": page, "limit": limit})
@@ -413,6 +444,10 @@ func (h *Handler) ReassignTask(c *gin.Context) {
 		return
 	}
 
+	if oldAssignee != nil {
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *oldAssignee)
+	}
+
 	h.logEvent(id, agentNameStr, "reassigned", "", "available", req.Reason)
 
 	c.JSON(200, gin.H{"message": "Task reassigned to " + req.Agent})
@@ -432,6 +467,74 @@ func (h *Handler) EscalateTask(c *gin.Context) {
 	h.broadcastTaskEvent(id, "task_updated", "", "escalated")
 
 	c.JSON(200, gin.H{"message": "Task escalated to PM"})
+}
+
+func (h *Handler) ReleaseTask(c *gin.Context) {
+	taskID := c.Param("id")
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	c.ShouldBindJSON(&req)
+
+	var status string
+	var assignee *string
+	var retryCount, maxRetries int
+	err := h.db.QueryRow(
+		"SELECT status, assignee, retry_count, max_retries FROM tasks WHERE id = $1",
+		taskID,
+	).Scan(&status, &assignee, &retryCount, &maxRetries)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Task not found"})
+		return
+	}
+
+	releasable := map[string]bool{"claimed": true, "in_progress": true, "orphaned": true}
+	if !releasable[status] {
+		c.JSON(400, gin.H{
+			"error":                "Task cannot be released",
+			"current_status":       status,
+			"releasable_statuses":  []string{"claimed", "in_progress", "orphaned"},
+		})
+		return
+	}
+
+	if retryCount >= maxRetries {
+		h.db.Exec("UPDATE tasks SET status = 'escalated', escalated = true, updated_at = NOW() WHERE id = $1", taskID)
+		if assignee != nil {
+			h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *assignee)
+		}
+		h.logEvent(taskID, "pm", "escalated", status, "escalated", "Max retries exceeded, task escalated")
+		h.broadcastTaskEvent(taskID, "task_updated", status, "escalated")
+		c.JSON(200, gin.H{"message": "Task escalated (max retries exceeded)", "new_status": "escalated"})
+		return
+	}
+
+	note := "Task released by PM"
+	if req.Reason != "" {
+		note += ": " + req.Reason
+	}
+
+	_, err = h.db.Exec(
+		"UPDATE tasks SET status = 'available', assignee = NULL, retry_count = retry_count + 1, release_count = release_count + 1, claimed_at = NULL, updated_at = NOW() WHERE id = $1",
+		taskID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to release task"})
+		return
+	}
+
+	if assignee != nil {
+		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *assignee)
+	}
+
+	h.logEvent(taskID, "pm", "released", status, "available", note)
+	h.broadcastTaskEvent(taskID, "task_updated", status, "available")
+
+	var task Task
+	h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID)
+
+	c.JSON(200, gin.H{"message": "Task released", "task": task, "previous_assignee": assignee})
 }
 
 // --- AGENT ROUTES ---
@@ -764,6 +867,7 @@ func (h *Handler) RegisterUserRoutes(g *gin.RouterGroup) {
 	g.DELETE("/tasks/:id", h.DeleteTask)
 	g.POST("/tasks/:id/reassign", h.ReassignTask)
 	g.POST("/tasks/:id/escalate", h.EscalateTask)
+	g.POST("/tasks/:id/release", h.ReleaseTask)
 }
 
 func (h *Handler) RegisterAgentRoutes(g *gin.RouterGroup) {
@@ -833,4 +937,124 @@ func joinIssues(issues []string) string {
 		result += "; " + i
 	}
 	return result
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func StartStaleTaskMonitor(db *sqlx.DB, hub *websocket.Hub) {
+	interval := time.Duration(getEnvInt("STALE_CHECK_INTERVAL_MINUTES", 5)) * time.Minute
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		log.Println("[StaleMonitor] Checking for stale tasks...")
+
+		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
+		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
+
+		type ReleasedTask struct {
+			ID       string  `db:"id"`
+			Assignee *string `db:"assignee"`
+		}
+
+		rows, err := db.Queryx(
+			`UPDATE tasks SET
+				status = 'available',
+				assignee = NULL,
+				retry_count = retry_count + 1,
+				release_count = release_count + 1,
+				claimed_at = NULL,
+				updated_at = NOW()
+			 WHERE id IN (
+				SELECT id FROM tasks
+				WHERE status IN ('claimed', 'in_progress')
+				AND claimed_at IS NOT NULL
+				AND claimed_at < NOW() - ($1 || ' minutes')::interval
+				AND updated_at < NOW() - ($2 || ' minutes')::interval
+				AND retry_count < max_retries
+			 )
+			 RETURNING id, assignee`,
+			claimTimeout, progressTimeout)
+		if err == nil {
+			for rows.Next() {
+				var t ReleasedTask
+				rows.StructScan(&t)
+				if t.Assignee != nil {
+					db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *t.Assignee)
+				}
+				db.Exec(
+					`INSERT INTO task_events (task_id, agent, event, from_status, to_status, note)
+					 VALUES ($1, $2, 'auto_released', $3, 'available', $4)`,
+					t.ID, "system", "claimed", fmt.Sprintf("Task auto-released: no progress for %d minutes", progressTimeout))
+				if hub != nil {
+					event := map[string]interface{}{
+						"task_id":     t.ID,
+						"from_status": "claimed",
+						"to_status":   "available",
+						"agent":       nil,
+						"event":       "task_released",
+						"timestamp":   time.Now().UTC(),
+					}
+					data, _ := json.Marshal(event)
+					hub.Broadcast(data)
+				}
+				log.Printf("[StaleMonitor] Auto-released stale task: %s", t.ID)
+			}
+			rows.Close()
+		}
+
+		rows, err = db.Queryx(
+			`UPDATE tasks SET
+				status = 'escalated',
+				escalated = true,
+				updated_at = NOW()
+			 WHERE id IN (
+				SELECT id FROM tasks
+				WHERE status IN ('claimed', 'in_progress')
+				AND claimed_at IS NOT NULL
+				AND claimed_at < NOW() - ($1 || ' minutes')::interval
+				AND updated_at < NOW() - ($2 || ' minutes')::interval
+				AND retry_count >= max_retries
+			 )
+			 RETURNING id, assignee`,
+			claimTimeout, progressTimeout)
+		if err == nil {
+			for rows.Next() {
+				var t ReleasedTask
+				rows.StructScan(&t)
+				if t.Assignee != nil {
+					db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *t.Assignee)
+				}
+				db.Exec(
+					`INSERT INTO task_events (task_id, agent, event, from_status, to_status, note)
+					 VALUES ($1, $2, 'escalated', $3, 'escalated', $4)`,
+					t.ID, "system", "claimed", "Max retries exceeded, task escalated")
+				if hub != nil {
+					event := map[string]interface{}{
+						"task_id":     t.ID,
+						"from_status": "claimed",
+						"to_status":   "escalated",
+						"agent":       nil,
+						"event":       "task_updated",
+						"timestamp":   time.Now().UTC(),
+					}
+					data, _ := json.Marshal(event)
+					hub.Broadcast(data)
+				}
+				log.Printf("[StaleMonitor] Escalated stale task (max retries): %s", t.ID)
+			}
+			rows.Close()
+		}
+
+		if err != nil {
+			log.Printf("[StaleMonitor] Error: %v", err)
+		}
+	}
 }

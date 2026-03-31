@@ -158,6 +158,9 @@ func main() {
 	// Start health monitor
 	go agent.StartHealthMonitor(database, 5*time.Minute)
 
+	// Start stale task monitor
+	go task.StartStaleTaskMonitor(database, wsHub)
+
 	log.Printf("AgentHub starting on :%s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
