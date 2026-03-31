@@ -659,17 +659,14 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "Failed to complete task"})
 		return
 	}
+	// Decrement agent counter regardless of newStatus (task is leaving the agent's queue)
+	h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
 
 	note := req.Notes
 	if req.Branch != "" {
 		note += " (branch: " + req.Branch + ")"
 	}
 	h.logEvent(taskID, agentNameStr, "completed", oldStatus, newStatus, note)
-
-	// If failed/escalated, decrement agent current_tasks counter
-	if newStatus == "failed" || newStatus == "escalated" {
-		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", agentNameStr)
-	}
 
 	// If critical severity or max retries, escalate
 	if newStatus == "failed" {
