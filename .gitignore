@@ -9,3 +9,4 @@ agenthub-worker
 ateam-worker
 worker
 *.worker
+server
