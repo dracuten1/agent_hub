@@ -10,3 +10,4 @@ ateam-worker
 worker
 *.worker
 server
+internal/time/\ninternal/uptime/\nworkerbridge\n*.rej\nserver
