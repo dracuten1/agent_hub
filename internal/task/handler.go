@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -251,26 +250,27 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		argIdx++
 	}
 
-	stale := c.Query("stale")
-	if stale == "true" {
+	stale := c.DefaultQuery("stale", "") == "true"
+	if stale {
 		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
 		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
-		whereClause += " AND status IN ('claimed', 'in_progress')"
-		whereClause += " AND claimed_at IS NOT NULL"
-		whereClause += " AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
-		args = append(args, claimTimeout)
-		argIdx++
-		whereClause += " AND updated_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval"
-		args = append(args, progressTimeout)
-		argIdx++
+		whereClause += " AND (status = 'available' OR (status = 'claimed' AND claimed_at < NOW() - ($" + placeholder(argIdx) + " || ' minutes')::interval AND updated_at < NOW() - ($" + placeholder(argIdx+1) + " || ' minutes')::interval))"
+		args = append(args, claimTimeout, progressTimeout)
+		argIdx += 2
 	}
 
 	countQuery := "SELECT COUNT(*) FROM tasks WHERE " + whereClause
 	var total int
 	h.db.Get(&total, countQuery, args...)
 
-	query := "SELECT * FROM tasks WHERE " + whereClause
-	query += " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
+	var orderBy string
+	if stale {
+		orderBy = " ORDER BY stale = true, claimed_at ASC"
+	} else {
+		orderBy = " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
+	}
+
+	query := "SELECT * FROM tasks WHERE " + whereClause + orderBy
 	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx+1)
 	args = append(args, limit, offset)
 
@@ -285,7 +285,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		tasks = []Task{}
 	}
 
-	if stale == "true" {
+	if stale {
 		for i := range tasks {
 			tasks[i].StaleReason = "no_progress"
 			if tasks[i].ClaimedAt != nil {
@@ -447,6 +447,9 @@ func (h *Handler) ReassignTask(c *gin.Context) {
 	if oldAssignee != nil {
 		h.db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *oldAssignee)
 	}
+
+	// Increment new agent's capacity counter
+	h.db.Exec("UPDATE agents SET current_tasks = current_tasks + 1 WHERE name = $1", req.Agent)
 
 	h.logEvent(id, agentNameStr, "reassigned", "", "available", req.Reason)
 
@@ -946,115 +949,4 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
-}
-
-func StartStaleTaskMonitor(db *sqlx.DB, hub *websocket.Hub) {
-	interval := time.Duration(getEnvInt("STALE_CHECK_INTERVAL_MINUTES", 5)) * time.Minute
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		log.Println("[StaleMonitor] Checking for stale tasks...")
-
-		claimTimeout := getEnvInt("CLAIM_TIMEOUT_MINUTES", 30)
-		progressTimeout := getEnvInt("PROGRESS_TIMEOUT_MINUTES", 15)
-
-		type ReleasedTask struct {
-			ID       string  `db:"id"`
-			Assignee *string `db:"assignee"`
-		}
-
-		rows, err := db.Queryx(
-			`UPDATE tasks SET
-				status = 'available',
-				assignee = NULL,
-				retry_count = retry_count + 1,
-				release_count = release_count + 1,
-				claimed_at = NULL,
-				updated_at = NOW()
-			 WHERE id IN (
-				SELECT id FROM tasks
-				WHERE status IN ('claimed', 'in_progress')
-				AND claimed_at IS NOT NULL
-				AND claimed_at < NOW() - ($1 || ' minutes')::interval
-				AND updated_at < NOW() - ($2 || ' minutes')::interval
-				AND retry_count < max_retries
-			 )
-			 RETURNING id, assignee`,
-			claimTimeout, progressTimeout)
-		if err == nil {
-			for rows.Next() {
-				var t ReleasedTask
-				rows.StructScan(&t)
-				if t.Assignee != nil {
-					db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *t.Assignee)
-				}
-				db.Exec(
-					`INSERT INTO task_events (task_id, agent, event, from_status, to_status, note)
-					 VALUES ($1, $2, 'auto_released', $3, 'available', $4)`,
-					t.ID, "system", "claimed", fmt.Sprintf("Task auto-released: no progress for %d minutes", progressTimeout))
-				if hub != nil {
-					event := map[string]interface{}{
-						"task_id":     t.ID,
-						"from_status": "claimed",
-						"to_status":   "available",
-						"agent":       nil,
-						"event":       "task_released",
-						"timestamp":   time.Now().UTC(),
-					}
-					data, _ := json.Marshal(event)
-					hub.Broadcast(data)
-				}
-				log.Printf("[StaleMonitor] Auto-released stale task: %s", t.ID)
-			}
-			rows.Close()
-		}
-
-		rows, err = db.Queryx(
-			`UPDATE tasks SET
-				status = 'escalated',
-				escalated = true,
-				updated_at = NOW()
-			 WHERE id IN (
-				SELECT id FROM tasks
-				WHERE status IN ('claimed', 'in_progress')
-				AND claimed_at IS NOT NULL
-				AND claimed_at < NOW() - ($1 || ' minutes')::interval
-				AND updated_at < NOW() - ($2 || ' minutes')::interval
-				AND retry_count >= max_retries
-			 )
-			 RETURNING id, assignee`,
-			claimTimeout, progressTimeout)
-		if err == nil {
-			for rows.Next() {
-				var t ReleasedTask
-				rows.StructScan(&t)
-				if t.Assignee != nil {
-					db.Exec("UPDATE agents SET current_tasks = GREATEST(current_tasks - 1, 0) WHERE name = $1", *t.Assignee)
-				}
-				db.Exec(
-					`INSERT INTO task_events (task_id, agent, event, from_status, to_status, note)
-					 VALUES ($1, $2, 'escalated', $3, 'escalated', $4)`,
-					t.ID, "system", "claimed", "Max retries exceeded, task escalated")
-				if hub != nil {
-					event := map[string]interface{}{
-						"task_id":     t.ID,
-						"from_status": "claimed",
-						"to_status":   "escalated",
-						"agent":       nil,
-						"event":       "task_updated",
-						"timestamp":   time.Now().UTC(),
-					}
-					data, _ := json.Marshal(event)
-					hub.Broadcast(data)
-				}
-				log.Printf("[StaleMonitor] Escalated stale task (max retries): %s", t.ID)
-			}
-			rows.Close()
-		}
-
-		if err != nil {
-			log.Printf("[StaleMonitor] Error: %v", err)
-		}
-	}
 }
