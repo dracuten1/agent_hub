@@ -14,6 +14,7 @@ import (
 	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
+	"github.com/tuyen/agenthub/internal/health"
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
@@ -23,6 +24,9 @@ import (
 )
 
 func main() {
+	// Record server start time for uptime tracking
+	startTime := time.Now()
+
 	// Config
 	dbURL := os.Getenv("DATABASE_URL")
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -55,7 +59,6 @@ func main() {
 	if adminPassword == "" {
 		log.Fatal("AGENTHUB_ADMIN_PASS env var is required")
 	}
-	// Only hash password if admin doesn't exist yet
 	var adminExists int
 	database.Get(&adminExists, "SELECT COUNT(*) FROM users WHERE username = 'admin'")
 	if adminExists == 0 {
@@ -81,10 +84,8 @@ func main() {
 	// Router
 	r := gin.Default()
 
-	// Request logging (first — before any processing)
+	// Request logging
 	r.Use(middleware.Logging())
-	// Rate limiting
-	// r.Use(middleware.RateLimit()) // Disabled: rate limiter too aggressive for localhost testing
 	// CORS
 	r.Use(middleware.CORS())
 
@@ -97,12 +98,10 @@ func main() {
 	go wsHub.Run()
 	wsHandler := websocket.NewHandler(wsHub)
 
-	// Health
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
+	// Health handler (no auth required)
+	healthHandler := health.NewHandler(startTime)
 
-	// Public routes (user auth + agent registration)
+	// Public routes (user auth + agent registration + health)
 	public := r.Group("/api")
 	{
 		authHandler := auth.NewHandler(database, jwtSecret)
@@ -110,6 +109,7 @@ func main() {
 		public.GET("/hello", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "hello from agenthub", "version": "1.1"})
 		})
+		public.GET("/health", healthHandler.Health)
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
 		public.POST("/agent/register", agentHandler.RegisterAgent)
@@ -131,8 +131,6 @@ func main() {
 	// Comment handler (shared across agent + user routes)
 	commentHandler := comment.NewHandler(database)
 	commentHandler.RegisterAgentRoutes(agentGroup)
-
-	// User routes (JWT auth)
 
 	// User routes (JWT auth)
 	user := r.Group("/api")
