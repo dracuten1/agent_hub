@@ -1,77 +1,59 @@
-# AgentHub — Tasks
+# AgentHub — Task Board
 
-## Completed
+## Project
+- **Project:** agenthub
+- **Repo:** `/root/.openclaw/workspace-pm/projects/agenthub/`
+- **Tech:** Go (Gin) + PostgreSQL + Docker
+- **API:** http://localhost:8081
+- **Branch:** main
 
-### AgentHub Fix Sprint (2026-03-31) ✅
+---
 
-#### BUG-6: TestTask fail path slot leak — P0 ✅
-- Fixed: `TestTask` fail path now decrements the **assignee's** `current_tasks`, not the tester's
-- Added: `ClaimTask` now increments `current_tasks` on claim
-- Test: E2E verified — slot released on test fail
+## Phase 1: Worker Framework (Current)
 
-#### IMPROVE-14: Dashboard route + error handling + dedup — P1 ✅
-- Route renamed: `/api/dashboard` → `/api/dashboard/stats`
-- Queries consolidated: 4 task queries → 1 with FILTER, 3 agent queries → 1 with FILTER
-- Named struct `DashboardEvent` replaces anonymous struct
-- Proper error handling added
+### Available (Backlog)
+1. **Task type field** — Add `type` enum to tasks: `coding`, `review`, `testing`, `planning` (high)
+2. **Worker registration** — POST /api/workers/register with role, auth token (high)
+3. **Filtered task polling** — GET /api/tasks?status=available&type=coding (high)
+4. **Task claiming by worker** — PUT /api/tasks/:id/claim with worker_id (high)
+5. **Auto-branch on claim** — Worker creates `feature/<id>-<slug>` branch (medium)
 
-#### IMPROVE-15: GetQueue consolidation — P1 ✅
-- 3 separate agent queries → 1 query
-- Already done in earlier session
+### Design Needed
+1. **Worker binary structure** — How workers poll, execute, report back
+2. **OpenCode integration** — How coding worker invokes OpenCode for implementation
+3. **Review worker logic** — Diff analysis, comment posting, pass/fail criteria
+4. **Team Leader worker** — Codebase scanning → improvement plan → task creation
+5. **Merge gate** — PM approves before feature branch merges to main
 
-#### IMPROVE-16: CORS multi-origin — P2 ✅
-- Parses comma-separated `CORS_ALLOWED_ORIGINS`
-- Matches request `Origin` header dynamically
-- Falls back to `*` when env empty
-- Tests added
+### In Progress
+1. **WebSocket Events — Backend** (dev2) — 6 review issues, needs_fix
 
-#### IMPROVE-17: Rate limiting — P2 ✅
-- Middleware-based rate limiting via `golang.org/x/time/rate`
-- Auth paths: 5/min per IP
-- General paths: 60/min per IP
-- X-Forwarded-For support for reverse proxies
-- Tests added
+### Completed ✅
+1. Core API: tasks CRUD, auth (JWT + API key), queue management
+2. Task Comments — full CRUD with ownership + auth (reviewed + tested)
+3. Bug fixes: slot leaks, status guards, GetQueue 3→1 query, rate limiting
+4. 16 files gofmt'd
+5. Live smoke tests passing
 
-#### IMPROVE-18: Admin seeding optimization — P2 ✅
-- Skips bcrypt hash when admin already exists
-- Single query check before expensive hash
+---
 
-#### IMPROVE-19: gofmt — P3 ✅
-- Import ordering fixed
+## Phase 2: Self-Improvement (After Phase 1)
+- Team Leader worker scans AgentHub codebase every 2h
+- Creates 1-2 improvement tasks automatically
+- Workers pick up tasks, work on branches, never touch main
+- PM reviews plans and approves merges
 
-### E2E Tests Verified ✅
+## Phase 3: Multi-Project Support
+- Workers can target any project repo
+- Project config in AgentHub (repo path, branch, tech stack)
+- Dashboard shows cross-project task status
 
-**Happy Path:**
-1. Create → available
-2. Claim → claimed
-3. Progress → in_progress
-4. Complete → done
-5. Review pass → test
-6. Test pass → deployed
-7. Slot freed, total_completed++
+---
 
-**Review Fail:**
-1-4 same
-5. Review fail → needs_fix
-6. Slot still held (dev needs to fix)
+## Monitoring
+- Build guard: isolated cron, every 10min, announce only on failure
+- Daily sprint digest: 8 AM
+- Session health: every 30min, reset >80% token usage
 
-**Test Fail:**
-1-5 same (review pass)
-6. Test fail → needs_fix
-7. Slot freed (BUG-6 fix verified)
-
-## Next Up
-
-### Go Worker Integration
-- Wire up systemd services for `agenthub-worker dev|review|test`
-- Test with OpenCode server running
-- Deploy to production
-
-### Frontend
-- React dashboard for task management
-- Real-time updates via WebSocket
-
-## Backlog
-- WH-6: Fix iteration loop (reuse session, max 5 rounds)
-- WH-7: Question handler (auto-answer vs escalate)
-- WH-8: Structured output parsing
+## Commits
+- `fdc01e1` — fix: done→needs_fix/escalated transitions + delete slot release

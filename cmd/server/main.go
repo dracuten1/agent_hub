@@ -10,12 +10,14 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/tuyen/agenthub/internal/agent"
 	"github.com/tuyen/agenthub/internal/auth"
+	"github.com/tuyen/agenthub/internal/comment"
 	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
 	"github.com/tuyen/agenthub/internal/project"
 	"github.com/tuyen/agenthub/internal/review"
 	"github.com/tuyen/agenthub/internal/task"
+	"github.com/tuyen/agenthub/internal/websocket"
 	"github.com/tuyen/agenthub/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -90,6 +92,11 @@ func main() {
 	authMiddleware := auth.NewMiddleware(jwtSecret)
 	agentMiddleware := auth.NewAgentMiddleware(database)
 
+	// WebSocket hub
+	wsHub := websocket.NewHub()
+	go wsHub.Run()
+	wsHandler := websocket.NewHandler(wsHub)
+
 	// Health
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -106,6 +113,7 @@ func main() {
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
 		public.POST("/agent/register", agentHandler.RegisterAgent)
+		public.GET("/ws", wsHandler.HandleWS)
 	}
 
 	// Agent routes (API key auth) — registration excluded (chicken-and-egg)
@@ -113,12 +121,18 @@ func main() {
 	agentGroup.Use(agentMiddleware)
 	{
 		agentHandler := agent.NewHandler(database)
-		taskHandler := task.NewHandler(database)
+		taskHandler := task.NewHandler(database, wsHub)
 
 		agentHandler.RegisterRoutes(agentGroup)
 		agentHandler.RegisterAgentRoutes(agentGroup)
 		taskHandler.RegisterAgentRoutes(agentGroup)
 	}
+
+	// Comment handler (shared across agent + user routes)
+	commentHandler := comment.NewHandler(database)
+	commentHandler.RegisterAgentRoutes(agentGroup)
+
+	// User routes (JWT auth)
 
 	// User routes (JWT auth)
 	user := r.Group("/api")
@@ -126,7 +140,7 @@ func main() {
 	{
 		projectHandler := project.NewHandler(database)
 		featureHandler := feature.NewHandler(database)
-		taskHandler := task.NewHandler(database)
+		taskHandler := task.NewHandler(database, wsHub)
 		reviewHandler := review.NewHandler(database)
 		dashboardHandler := dashboard.NewHandler(database)
 		agentHandler := agent.NewHandler(database)
@@ -134,6 +148,7 @@ func main() {
 		projectHandler.RegisterRoutes(user)
 		featureHandler.RegisterRoutes(user)
 		taskHandler.RegisterUserRoutes(user)
+		commentHandler.RegisterUserRoutes(user)
 		reviewHandler.RegisterRoutes(user)
 		dashboardHandler.RegisterRoutes(user)
 		agentHandler.RegisterUserRoutes(user)

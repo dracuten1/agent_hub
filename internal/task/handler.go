@@ -2,13 +2,16 @@ package task
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/tuyen/agenthub/internal/db"
+	"github.com/tuyen/agenthub/internal/websocket"
 )
 
 var validTransitions = map[string][]string{
@@ -39,7 +42,8 @@ func isValidTransition(from, to string) bool {
 }
 
 type Handler struct {
-	db *sqlx.DB
+	db  *sqlx.DB
+	hub *websocket.Hub
 }
 
 type Task struct {
@@ -128,8 +132,8 @@ type ReassignRequest struct {
 	Reason string `json:"reason"`
 }
 
-func NewHandler(db *sqlx.DB) *Handler {
-	return &Handler{db: db}
+func NewHandler(db *sqlx.DB, hub *websocket.Hub) *Handler {
+	return &Handler{db: db, hub: hub}
 }
 
 // --- USER ROUTES (PM/Owner) ---
@@ -215,6 +219,22 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		args = append(args, status)
 		argIdx++
 	}
+
+	// Filter by task_type
+	if taskType := c.Query("type"); taskType != "" {
+		allowed := map[string]bool{"general": true, "dev": true, "review": true, "test": true}
+		if !allowed[taskType] {
+			c.JSON(400, gin.H{
+				"error":    "Invalid type filter",
+				"allowed":  []string{"general", "dev", "review", "test"},
+			})
+			return
+		}
+		whereClause += " AND task_type = " + placeholder(argIdx)
+		args = append(args, taskType)
+		argIdx++
+	}
+
 	if projectID != "" {
 		whereClause += " AND project_id = " + placeholder(argIdx)
 		args = append(args, projectID)
@@ -288,6 +308,7 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 	}
 
 	var oldStatus string
+	var err error
 	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", id)
 
 	updates := "updated_at = NOW()"
@@ -327,7 +348,7 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 
 	query := "UPDATE tasks SET " + updates + " WHERE id = $1 RETURNING *"
 	var task Task
-	err := h.db.QueryRowx(query, args...).StructScan(&task)
+	err = h.db.QueryRowx(query, args...).StructScan(&task)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to update task"})
 		return
@@ -408,6 +429,7 @@ func (h *Handler) EscalateTask(c *gin.Context) {
 	}
 
 	h.logEvent(id, "system", "escalated", "", "escalated", "Task escalated to PM")
+	h.broadcastTaskEvent(id, "task_updated")
 
 	c.JSON(200, gin.H{"message": "Task escalated to PM"})
 }
@@ -420,14 +442,15 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 	agentNameStr := agentName.(string)
 
 	// Check task is available and transition is valid
-	var status string
-	err := h.db.Get(&status, "SELECT status FROM tasks WHERE id = $1", taskID)
+	var oldStatus string
+	var err error
+	err = h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "Task not found"})
 		return
 	}
-	if !isValidTransition(status, "claimed") {
-		c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to claimed", status)})
+	if !isValidTransition(oldStatus, "claimed") {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to claimed", oldStatus)})
 		return
 	}
 
@@ -443,10 +466,12 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 	// Increment agent's current_tasks counter
 	h.db.Exec("UPDATE agents SET current_tasks = current_tasks + 1 WHERE name = $1", agentNameStr)
 
-	h.logEvent(taskID, agentNameStr, "claimed", status, "claimed", "Task claimed by agent")
+	h.logEvent(taskID, agentNameStr, "claimed", oldStatus, "claimed", "Task claimed by agent")
 
 	var task Task
 	h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID)
+
+	h.broadcastTaskEvent(taskID, "task_updated")
 
 	c.JSON(200, gin.H{"task": task})
 }
@@ -480,6 +505,8 @@ func (h *Handler) UpdateProgress(c *gin.Context) {
 
 	h.logEvent(taskID, agentNameStr, "progress", "", "in_progress", req.Note)
 
+	h.broadcastTaskEvent(taskID, "task_updated")
+
 	c.JSON(200, gin.H{"message": "Progress updated", "progress": req.Progress, "new_status": "in_progress"})
 }
 
@@ -495,6 +522,7 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	}
 
 	var oldStatus string
+	var err error
 	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 
 	newStatus := "review" // auto-transition to review for review/test workers
@@ -512,7 +540,7 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.Exec(
+	_, err = h.db.Exec(
 		`UPDATE tasks SET status = $1, progress = 100, completed_at = NOW(), updated_at = NOW()
 		 WHERE id = $2 AND assignee = $3`,
 		newStatus, taskID, agentNameStr)
@@ -539,8 +567,11 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		if retryCount >= maxRetries {
 			h.db.Exec("UPDATE tasks SET status = 'escalated', escalated = true WHERE id = $1", taskID)
 			h.logEvent(taskID, "system", "escalated", "failed", "escalated", "Max retries exceeded")
+			h.broadcastTaskEvent(taskID, "task_updated")
 		}
 	}
+
+	h.broadcastTaskEvent(taskID, "task_updated")
 
 	c.JSON(200, gin.H{"message": "Task completed", "new_status": newStatus})
 }
@@ -557,7 +588,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 	}
 
 	var oldStatus string
-	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
+	err := h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
 
 	if req.Verdict == "pass" {
 		if !isValidTransition(oldStatus, "test") {
@@ -565,7 +596,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			return
 		}
 		// Pass → auto to test
-		_, err := h.db.Exec(
+		_, err = h.db.Exec(
 			`UPDATE tasks SET review_verdict = 'pass', review_severity = NULL, review_issues = '{}',
 			 status = 'test', updated_at = NOW()
 			 WHERE id = $1 AND status IN ('review', 'done')`,
@@ -575,6 +606,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			return
 		}
 		h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "test", "Review passed")
+		h.broadcastTaskEvent(taskID, "task_updated")
 
 		c.JSON(200, gin.H{"message": "Review passed", "new_status": "test"})
 
@@ -598,6 +630,7 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 				 WHERE id = $3 AND status IN ('review', 'done')`,
 				severity, db.StringArray(req.Issues), taskID)
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "escalated", "Critical issues found: "+joinIssues(req.Issues))
+			h.broadcastTaskEvent(taskID, "task_updated")
 			c.JSON(200, gin.H{"message": "Critical issues found, escalated to PM", "new_status": "escalated"})
 
 		} else {
@@ -624,11 +657,13 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 			if retryCount >= maxRetries {
 				h.db.Exec("UPDATE tasks SET status = 'escalated', escalated = true WHERE id = $1", taskID)
 				h.logEvent(taskID, "system", "escalated", newStatus, "escalated", "Max retries exceeded after review")
+				h.broadcastTaskEvent(taskID, "task_updated")
 				c.JSON(200, gin.H{"message": "Max retries exceeded, escalated to PM", "new_status": "escalated"})
 				return
 			}
 
 			h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, newStatus, "Review failed ("+severity+"): "+joinIssues(req.Issues))
+			h.broadcastTaskEvent(taskID, "task_updated")
 			c.JSON(200, gin.H{"message": "Review failed", "new_status": newStatus, "severity": severity})
 		}
 	}
@@ -646,7 +681,11 @@ func (h *Handler) TestTask(c *gin.Context) {
 	}
 
 	var oldStatus string
-	h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
+	err := h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Task not found"})
+		return
+	}
 
 	if req.Verdict == "pass" {
 		if !isValidTransition(oldStatus, "deployed") {
@@ -667,6 +706,7 @@ func (h *Handler) TestTask(c *gin.Context) {
 		}
 
 		h.logEvent(taskID, agentNameStr, "tested", oldStatus, "deployed", "All tests passed")
+		h.broadcastTaskEvent(taskID, "task_updated")
 		c.JSON(200, gin.H{"message": "Tests passed, task deployed", "new_status": "deployed"})
 
 	} else {
@@ -697,11 +737,13 @@ func (h *Handler) TestTask(c *gin.Context) {
 		if retryCount >= maxRetries {
 			h.db.Exec("UPDATE tasks SET status = 'escalated', escalated = true WHERE id = $1", taskID)
 			h.logEvent(taskID, "system", "escalated", newStatus, "escalated", "Max retries exceeded after test")
+			h.broadcastTaskEvent(taskID, "task_updated")
 			c.JSON(200, gin.H{"message": "Max retries exceeded, escalated to PM", "new_status": "escalated"})
 			return
 		}
 
 		h.logEvent(taskID, agentNameStr, "tested", oldStatus, newStatus, "Tests failed: "+joinIssues(req.Issues))
+		h.broadcastTaskEvent(taskID, "task_updated")
 		c.JSON(200, gin.H{"message": "Tests failed", "new_status": newStatus})
 	}
 }
@@ -730,6 +772,26 @@ func (h *Handler) logEvent(taskID, agent, event, fromStatus, toStatus, note stri
 		`INSERT INTO task_events (task_id, agent, event, from_status, to_status, note)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		taskID, agent, event, nilIfEmpty(fromStatus), nilIfEmpty(toStatus), note)
+}
+
+func (h *Handler) broadcastTaskEvent(taskID string, eventType string) {
+	var task Task
+	if err := h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID); err != nil {
+		return
+	}
+	if h.hub == nil {
+		return
+	}
+	event := map[string]interface{}{
+		"task_id":    task.ID,
+		"from_status": task.Status,
+		"to_status":   task.Status,
+		"agent":       task.Assignee,
+		"event":       eventType,
+		"timestamp":   time.Now().UTC(),
+	}
+	data, _ := json.Marshal(event)
+	h.hub.Broadcast(data)
 }
 
 func nilOrEmpty(s []string) interface{} {
