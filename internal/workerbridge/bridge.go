@@ -63,7 +63,12 @@ func (b *Bridge) pollAndProcess(ctx context.Context) error {
 	}
 
 	task := tasks[0]
-	log.Printf("[Bridge] Task: %s (%s)", task.ID, task.Title)
+	workflowInfo := ""
+	if task.WorkflowID != "" {
+		workflowInfo = fmt.Sprintf(" [workflow=%s, phase=%s (idx %d)]",
+			task.WorkflowID, task.WorkflowPhase, task.WorkflowPhaseIndex)
+	}
+	log.Printf("[Bridge] Task: %s (%s)%s", task.ID, task.Title, workflowInfo)
 
 	// 2. Claim
 	if err := b.claimTask(task.ID); err != nil {

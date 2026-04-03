@@ -69,6 +69,10 @@ func (a *Agent) Run(ctx context.Context, task worker.Task) *TaskResult {
 	cmd.Stderr = &stderr
 
 	log.Printf("[Agent] openclaw agent --agent %s (timeout=%ds)", a.cfg.AgentID, a.cfg.TaskTimeout)
+	if task.WorkflowID != "" {
+		log.Printf("[Agent] Workflow context: phase=%s (index %d), workflow_id=%s",
+			task.WorkflowPhase, task.WorkflowPhaseIndex, task.WorkflowID)
+	}
 
 	err := cmd.Run()
 	result := &TaskResult{Duration: time.Since(start)}
@@ -140,6 +144,12 @@ func (a *Agent) buildPrompt(task worker.Task) string {
 	}
 
 	sb.WriteString("\n\nImplement the task, run build to verify. Reply done with files changed.")
+
+	// Append workflow context if present
+	if task.WorkflowID != "" {
+		sb.WriteString(fmt.Sprintf("\n\n[Workflow context: phase=%s (index %d), workflow_id=%s]",
+			task.WorkflowPhase, task.WorkflowPhaseIndex, task.WorkflowID))
+	}
 
 	return sb.String()
 }

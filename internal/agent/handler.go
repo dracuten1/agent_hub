@@ -178,24 +178,32 @@ func (h *Handler) GetQueue(c *gin.Context) {
 	}
 
 	type QueueTask struct {
-		ID             string         `json:"id" db:"id"`
-		Title          string         `json:"title" db:"title"`
-		Description    string         `json:"description" db:"description"`
-		Priority       string         `json:"priority" db:"priority"`
-		RequiredSkills db.StringArray `json:"required_skills" db:"required_skills"`
-		CreatedAt      string         `json:"created_at" db:"created_at"`
-		TaskType       string         `json:"task_type" db:"task_type"`
-		MatchScore     float64        `json:"match_score"`
+		ID                 string         `json:"id" db:"id"`
+		Title              string         `json:"title" db:"title"`
+		Description        string         `json:"description" db:"description"`
+		Priority           string         `json:"priority" db:"priority"`
+		RequiredSkills     db.StringArray `json:"required_skills" db:"required_skills"`
+		CreatedAt          string         `json:"created_at" db:"created_at"`
+		TaskType           string         `json:"task_type" db:"task_type"`
+		MatchScore         float64        `json:"match_score"`
+		WorkflowID         string         `json:"workflow_id" db:"workflow_id"`
+		WorkflowPhase      string         `json:"workflow_phase" db:"workflow_phase"`
+		WorkflowPhaseIndex int            `json:"workflow_phase_index" db:"workflow_phase_index"`
 	}
 
 	var tasks []QueueTask
 	rows, err := h.db.Queryx(
-		`SELECT id, title, description, priority, required_skills, created_at, task_type
-		 FROM tasks
-		 WHERE status = 'available' AND task_type IN (` + taskTypeFilter + `)
+		`SELECT p.id, p.title, p.description, p.priority, p.required_skills, p.created_at, p.task_type,
+		 COALESCE(wm.workflow_id, '') AS workflow_id,
+		 COALESCE(wp.phase_name, '') AS workflow_phase,
+		 COALESCE(wp.phase_index, 0) AS workflow_phase_index
+		 FROM tasks p
+		 LEFT JOIN workflow_task_map wm ON wm.task_id = p.id
+		 LEFT JOIN workflow_phases wp ON wp.id = wm.phase_id
+		 WHERE p.status = 'available' AND p.task_type IN (` + taskTypeFilter + `)
 		 ORDER BY
-		   CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END,
-		   created_at ASC
+		   CASE p.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END,
+		   p.created_at ASC
 		 LIMIT 10`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to get task queue"})

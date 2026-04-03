@@ -405,6 +405,11 @@ type Task struct {
 	Payload     json.RawMessage `json:"payload"`
 	Status      string          `json:"status"`
 	CreatedAt   string          `json:"created_at"`
+
+	// Workflow context
+	WorkflowID         string `json:"workflow_id"`
+	WorkflowPhase      string `json:"workflow_phase"`
+	WorkflowPhaseIndex int    `json:"workflow_phase_index"`
 }
 
 // RunOpenCode runs an OpenCode command and returns the output.
