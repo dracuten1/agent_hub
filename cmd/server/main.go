@@ -130,12 +130,16 @@ func main() {
 		public.GET("/ws", wsHandler.HandleWS)
 	}
 
+	// Workflow engine (created early so task handlers can reference it)
+	wfEngine := workflow.NewEngine(database)
+
 	// Agent routes (API key auth) — registration excluded (chicken-and-egg)
 	agentGroup := r.Group("/api/agent")
 	agentGroup.Use(agentMiddleware)
 	{
 		agentHandler := agent.NewHandler(database)
 		taskHandler := task.NewHandler(database, wsHub)
+		taskHandler.WorkflowAdvancer = wfEngine
 
 		agentHandler.RegisterRoutes(agentGroup)
 		agentHandler.RegisterAgentRoutes(agentGroup)
@@ -153,6 +157,7 @@ func main() {
 		projectHandler := project.NewHandler(database)
 		featureHandler := feature.NewHandler(database)
 		taskHandler := task.NewHandler(database, wsHub)
+		taskHandler.WorkflowAdvancer = wfEngine
 		reviewHandler := review.NewHandler(database)
 		agentHandler := agent.NewHandler(database)
 
@@ -164,7 +169,6 @@ func main() {
 		agentHandler.RegisterUserRoutes(user)
 
 		// Workflow engine routes
-		wfEngine := workflow.NewEngine(database)
 		workflow.RegisterRoutes(r, database, wfEngine)
 	}
 

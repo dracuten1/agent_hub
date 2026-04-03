@@ -44,17 +44,20 @@ const (
 
 // Phase represents a workflow phase row from DB
 type Phase struct {
-	ID            string `db:"id"`
-	WorkflowID    string `db:"workflow_id"`
-	PhaseName     string `db:"phase_name"`
-	PhaseIndex    int    `db:"phase_index"`
-	PhaseType     string `db:"phase_type"`
-	Status        string `db:"status"`
-	TotalTasks    int    `db:"total_tasks"`
-	CompletedTasks int   `db:"completed_tasks"`
-	FailedTasks   int    `db:"failed_tasks"`
-	PendingTasks  int    `db:"pending_tasks"`
-	Config        string `db:"config"`
+	ID             string `db:"id"`
+	WorkflowID     string `db:"workflow_id"`
+	PhaseName      string `db:"phase_name"`
+	PhaseIndex     int    `db:"phase_index"`
+	PhaseType      string `db:"phase_type"`
+	TaskType       string `db:"task_type"`
+	Status         string `db:"status"`
+	TotalTasks     int    `db:"total_tasks"`
+	CompletedTasks int    `db:"completed_tasks"`
+	FailedTasks    int    `db:"failed_tasks"`
+	PendingTasks   int    `db:"pending_tasks"`
+	Config         string `db:"config"`
+	CreatedAt      time.Time `db:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at"`
 }
 
 // WorkflowPhase represents a phase used by the Engine (not a DB row)
@@ -236,12 +239,23 @@ func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID str
 			return fmt.Errorf("createPerDevPhaseTasks: create task: %w", err)
 		}
 
-		// fn_dep_added trigger handles pending_deps++
+		// Add dependency (fn_dep_added trigger increments pending_deps)
 		_, err = e.db.ExecContext(ctx,
 			`INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
 			taskID, prev.ID)
 		if err != nil {
 			return fmt.Errorf("createPerDevPhaseTasks: add dep: %w", err)
+		}
+
+		// If parent task is already done, resolve dependency immediately
+		// (fn_task_completed won't fire because parent status isn't changing)
+		var parentStatus string
+		e.db.GetContext(ctx, &parentStatus, `SELECT status FROM tasks WHERE id=$1`, prev.ID)
+		if parentStatus == "done" || parentStatus == "deployed" {
+			e.db.ExecContext(ctx,
+				`UPDATE tasks SET pending_deps = GREATEST(pending_deps - 1, 0),
+				 status = CASE WHEN pending_deps <= 1 THEN 'available' ELSE status END,
+				 updated_at = NOW() WHERE id = $1`, taskID)
 		}
 
 		if err := e.addWorkflowMapping(ctx, taskID, wfID, phase.ID); err != nil {
@@ -350,6 +364,9 @@ func (e *Engine) evaluateDecisionPhase(ctx context.Context, wfID string, phase *
 
 // advanceWorkflow advances the workflow to the next phase.
 func (e *Engine) advanceWorkflow(wfID string) error {
+	// Resume workflow if paused
+	e.db.Exec(`UPDATE workflows SET status='active', updated_at=NOW() WHERE id=$1 AND status='paused'`, wfID)
+
 	// Get next pending phase
 	var next Phase
 	err := e.db.Get(&next,
@@ -377,7 +394,8 @@ func (e *Engine) advanceWorkflow(wfID string) error {
 	nextPhase := &WorkflowPhase{
 		ID: next.ID, WorkflowID: next.WorkflowID,
 		PhaseName: next.PhaseName, PhaseIndex: next.PhaseIndex,
-		PhaseType: next.PhaseType,
+		PhaseType: next.PhaseType, TaskType: next.TaskType,
+		Config: json.RawMessage(next.Config),
 	}
 	var projectID string
 	e.db.Get(&projectID, `SELECT project_id FROM workflows WHERE id=$1`, wfID)
@@ -573,10 +591,12 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 		if i == 0 {
 			status = PhaseRunning
 		}
+		// Marshal entire PhaseConfig (including count, task_type, etc.) into config column
+		configJSON, _ := json.Marshal(pc)
 		_, err = tx.Exec(
-			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, task_type, status)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			phaseID, wf.ID, pc.Name, i, pc.Type, pc.TaskType, status,
+			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, task_type, status, config)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			phaseID, wf.ID, pc.Name, i, pc.Type, pc.TaskType, status, configJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert phase %d: %w", i, err)
@@ -683,6 +703,41 @@ func ApproveGate(db *sqlx.DB, workflowID, phaseID string) error {
 // IsGatePhase returns true if the phase type is a gate
 func IsGatePhase(phaseType string) bool {
 	return phaseType == PhaseTypeGate
+}
+
+// CheckAndAdvancePhase checks if all tasks in the current phase are done,
+// marks the phase completed, and advances to the next phase via advanceWorkflow.
+// This is called from CompleteTask after a task is marked done.
+func (e *Engine) CheckAndAdvancePhase(taskID string) error {
+	ctx := context.Background()
+
+	var phaseID, wfID string
+	err := e.db.GetContext(ctx, &phaseID,
+		`SELECT phase_id FROM workflow_task_map WHERE task_id = $1`, taskID)
+	if err != nil {
+		return nil // not a workflow task, skip
+	}
+	err = e.db.GetContext(ctx, &wfID,
+		`SELECT workflow_id FROM workflow_phases WHERE id = $1`, phaseID)
+	if err != nil {
+		return nil
+	}
+
+	var totalTasks, completedTasks int
+	e.db.GetContext(ctx, &totalTasks,
+		`SELECT COALESCE(total_tasks,0) FROM workflow_phases WHERE id=$1`, phaseID)
+	e.db.GetContext(ctx, &completedTasks,
+		`SELECT COALESCE(completed_tasks,0) FROM workflow_phases WHERE id=$1`, phaseID)
+
+	if completedTasks >= totalTasks && totalTasks > 0 {
+		// Mark current phase completed
+		e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseCompleted, phaseID)
+		// Advance to next phase (creates tasks, handles gates, decisions, etc.)
+		return e.advanceWorkflow(wfID)
+	}
+	return nil
 }
 
 // ApproveGate approves a waiting-approval gate phase and advances to the next phase.
