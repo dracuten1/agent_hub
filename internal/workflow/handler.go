@@ -82,6 +82,8 @@ func (h *Handler) StartWorkflow(c *gin.Context) {
 	if len(req.Variables) > 0 {
 		b, _ := json.Marshal(req.Variables)
 		variables = string(b)
+	} else {
+		variables = "{}"
 	}
 	wf, err := h.engine.StartWorkflow(templateID, req.Name, req.ProjectID, req.Description, variables)
 	if err != nil {

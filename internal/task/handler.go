@@ -65,6 +65,8 @@ type Task struct {
 	RetryCount        int            `json:"retry_count" db:"retry_count"`
 	MaxRetries        int            `json:"max_retries" db:"max_retries"`
 	ReleaseCount      int            `json:"release_count" db:"release_count"`
+	WorkflowStatus    *string        `json:"workflow_status" db:"workflow_status"`
+	PendingDeps       int            `json:"pending_deps" db:"pending_deps"`
 	Progress          int            `json:"progress" db:"progress"`
 	ReviewVerdict     *string        `json:"review_verdict" db:"review_verdict"`
 	ReviewSeverity    *string        `json:"review_severity" db:"review_severity"`
@@ -72,13 +74,13 @@ type Task struct {
 	TestVerdict       *string        `json:"test_verdict" db:"test_verdict"`
 	TestIssues        db.StringArray `json:"test_issues" db:"test_issues"`
 	Escalated         bool           `json:"escalated" db:"escalated"`
-	ClaimedAt         *string        `json:"claimed_at" db:"claimed_at"`
-	CompletedAt       *string        `json:"completed_at" db:"completed_at"`
-	Deadline          *string        `json:"deadline" db:"deadline"`
+	ClaimedAt         *time.Time     `json:"claimed_at" db:"claimed_at"`
+	CompletedAt       *time.Time     `json:"completed_at" db:"completed_at"`
+	Deadline          *time.Time     `json:"deadline" db:"deadline"`
 	CreatedBy         *string        `json:"created_by" db:"created_by"`
 	UserID            *string        `json:"user_id" db:"user_id"`
-	CreatedAt         string         `json:"created_at" db:"created_at"`
-	UpdatedAt         string         `json:"updated_at" db:"updated_at"`
+	CreatedAt         time.Time      `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at" db:"updated_at"`
 	StaleReason       string         `json:"stale_reason,omitempty" db:"-"`
 	StaleDurationMinutes int         `json:"stale_duration_minutes,omitempty" db:"-"`
 }
@@ -284,6 +286,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	var tasks []Task
 	err := h.db.Select(&tasks, query, args...)
 	if err != nil {
+		log.Printf("[ListTasks] error: %v", err)
 		c.JSON(500, gin.H{"error": "Failed to list tasks"})
 		return
 	}
@@ -296,10 +299,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		for i := range tasks {
 			tasks[i].StaleReason = "no_progress"
 			if tasks[i].ClaimedAt != nil {
-				claimedAt, err := time.Parse(time.RFC3339, *tasks[i].ClaimedAt)
-				if err == nil {
-					tasks[i].StaleDurationMinutes = int(time.Since(claimedAt).Minutes())
-				}
+				tasks[i].StaleDurationMinutes = int(time.Since(*tasks[i].ClaimedAt).Minutes())
 			}
 		}
 	}
@@ -329,7 +329,7 @@ func (h *Handler) GetTask(c *gin.Context) {
 		FromStatus *string `json:"from_status" db:"from_status"`
 		ToStatus   *string `json:"to_status" db:"to_status"`
 		Note       *string `json:"note" db:"note"`
-		CreatedAt  string  `json:"created_at" db:"created_at"`
+		CreatedAt  time.Time `json:"created_at" db:"created_at"`
 	}
 	h.db.Select(&events, "SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at DESC", id)
 
