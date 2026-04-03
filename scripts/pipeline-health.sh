@@ -34,24 +34,18 @@ FIXED=""
 for AGENT in dev1 dev2 reviewer tester; do
   LOG="/tmp/bridge-${AGENT}.log"
   [ -f "$LOG" ] || continue
-  
-  AGE=$(( $(date +%s) - $(stat -c %Y "$LOG") ))
-  
-  if [ $AGE -gt 180 ]; then
-    # Bridge is zombie — kill, release task, restart
-    pkill -f "workerbridge.*--agent-id ${AGENT}" 2>/dev/null
-    sleep 1
-    
-    # Release any in_progress task for this agent
+
+  # Check if process is actually running
+  if ! pgrep -f "workerbridge.*--agent-id ${AGENT}" > /dev/null 2>&1; then
+    # Process dead — release any stuck task and restart
     STUCK=$(docker exec agenthub-db-1 psql -U agenthub -d agenthub -t -A -c \
       "SELECT id FROM tasks WHERE status='in_progress' AND assignee='${AGENT}' LIMIT 1;" 2>/dev/null)
-    
+
     if [ -n "$STUCK" ]; then
       docker exec agenthub-db-1 psql -U agenthub -d agenthub -c \
         "UPDATE tasks SET status='available', assignee=NULL, progress=0, claimed_at=NULL WHERE id='${STUCK}';" > /dev/null 2>&1
     fi
-    
-    # Restart bridge
+
     nohup ./workerbridge \
       --agent-id "$AGENT" \
       --role "${ROLES[$AGENT]}" \
@@ -59,8 +53,36 @@ for AGENT in dev1 dev2 reviewer tester; do
       --poll 10 \
       --timeout 600 \
       > "$LOG" 2>&1 &
-    
-    FIXED="$FIXED $AGENT"
+
+    FIXED="$FIXED ${AGENT}(dead)"
+    continue
+  fi
+
+  # Process alive — check log freshness (>5 min no output = stuck)
+  AGE=$(( $(date +%s) - $(stat -c %Y "$LOG") ))
+
+  if [ $AGE -gt 300 ]; then
+    pkill -f "workerbridge.*--agent-id ${AGENT}" 2>/dev/null
+    sleep 1
+
+    # Release any in_progress task for this agent
+    STUCK=$(docker exec agenthub-db-1 psql -U agenthub -d agenthub -t -A -c \
+      "SELECT id FROM tasks WHERE status='in_progress' AND assignee='${AGENT}' LIMIT 1;" 2>/dev/null)
+
+    if [ -n "$STUCK" ]; then
+      docker exec agenthub-db-1 psql -U agenthub -d agenthub -c \
+        "UPDATE tasks SET status='available', assignee=NULL, progress=0, claimed_at=NULL WHERE id='${STUCK}';" > /dev/null 2>&1
+    fi
+
+    nohup ./workerbridge \
+      --agent-id "$AGENT" \
+      --role "${ROLES[$AGENT]}" \
+      --token "${TOKENS[$AGENT]}" \
+      --poll 10 \
+      --timeout 600 \
+      > "$LOG" 2>&1 &
+
+    FIXED="$FIXED ${AGENT}(stuck)"
   fi
 done
 

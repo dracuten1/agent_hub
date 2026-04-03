@@ -48,6 +48,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.sendHeartbeat("idle")
 			if err := b.pollAndProcess(ctx); err != nil {
 				log.Printf("[Bridge] Error: %v", err)
+			} else {
+				log.Printf("[Bridge] Poll OK (idle)")
 			}
 		}
 	}
