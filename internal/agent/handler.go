@@ -155,7 +155,7 @@ func (h *Handler) GetQueue(c *gin.Context) {
 		// Explicit filter from caller
 		switch taskTypeParam {
 		case "dev":
-			taskTypeFilter = "'dev', 'general'"
+			taskTypeFilter = "'dev', 'general', 'plan', 'design'"
 		case "review":
 			taskTypeFilter = "'review', 'general'"
 		case "test":
@@ -167,7 +167,7 @@ func (h *Handler) GetQueue(c *gin.Context) {
 		// Fall back to agent role
 		switch role {
 		case "developer":
-			taskTypeFilter = "'dev', 'general'"
+			taskTypeFilter = "'dev', 'general', 'plan', 'design'"
 		case "reviewer":
 			taskTypeFilter = "'review', 'general'"
 		case "tester":

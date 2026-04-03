@@ -22,6 +22,7 @@ import (
 	"github.com/tuyen/agenthub/internal/task"
 	"github.com/tuyen/agenthub/internal/version"
 	"github.com/tuyen/agenthub/internal/websocket"
+	"github.com/tuyen/agenthub/internal/workflow"
 	"github.com/tuyen/agenthub/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -161,6 +162,10 @@ func main() {
 		commentHandler.RegisterUserRoutes(user)
 		reviewHandler.RegisterRoutes(user)
 		agentHandler.RegisterUserRoutes(user)
+
+		// Workflow engine routes
+		wfEngine := workflow.NewEngine(database)
+		workflow.RegisterRoutes(r, database, wfEngine)
 	}
 
 	// Start health monitor

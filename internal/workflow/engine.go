@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -58,32 +59,39 @@ type Phase struct {
 
 // WorkflowPhase represents a phase used by the Engine (not a DB row)
 type WorkflowPhase struct {
-	ID             string `db:"id"`
-	WorkflowID     string `db:"workflow_id"`
-	PhaseName      string `db:"phase_name"`
-	PhaseIndex     int    `db:"phase_index"`
-	PhaseType      string `db:"phase_type"`
-	TaskType       string `db:"task_type"`
-	Config         json.RawMessage `db:"config"`
-	TotalTasks     int    `db:"total_tasks"`
-	CompletedTasks int    `db:"completed_tasks"`
-	FailedTasks    int    `db:"failed_tasks"`
-	PendingTasks   int    `db:"pending_tasks"`
+	ID             string `db:"id" json:"id"`
+	WorkflowID     string `db:"workflow_id" json:"workflow_id"`
+	PhaseName      string `db:"phase_name" json:"phase_name"`
+	PhaseIndex     int    `db:"phase_index" json:"phase_index"`
+	PhaseType      string `db:"phase_type" json:"phase_type"`
+	TaskType       string `db:"task_type" json:"task_type"`
+	Status         string `db:"status" json:"status"`
+	Config         json.RawMessage `db:"config" json:"config,omitempty"`
+	TotalTasks     int    `db:"total_tasks" json:"total_tasks"`
+	CompletedTasks int    `db:"completed_tasks" json:"completed_tasks"`
+	FailedTasks    int    `db:"failed_tasks" json:"failed_tasks"`
+	PendingTasks   int    `db:"pending_tasks" json:"pending_tasks"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // Workflow represents a workflow instance
 type Workflow struct {
-	ID          string `db:"id"`
-	ProjectID   string `db:"project_id"`
-	Name        string `db:"name"`
-	TotalPhases int    `db:"total_phases"`
-	Status      string `db:"status"`
+	ID           string `db:"id" json:"id"`
+	ProjectID    string `db:"project_id" json:"project_id"`
+	Name         string `db:"name" json:"name"`
+	TotalPhases  int    `db:"total_phases" json:"total_phases"`
+	Status       string `db:"status" json:"status"`
+	CurrentPhase int    `db:"current_phase" json:"current_phase"`
 }
 
 // PhaseConfig represents configuration for a workflow phase
 type PhaseConfig struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
+	Type     string          `json:"phase_type"`
+	Name     string          `json:"phase_name"`
+	TaskType string          `json:"task_type"`
+	Config   json.RawMessage `json:"config,omitempty"`
+	Count    int             `json:"count,omitempty"`
 }
 
 // Engine manages workflow operations
@@ -424,6 +432,7 @@ func (e *Engine) sendGateNotification(wfID string, phase *WorkflowPhase, approve
 // createTask inserts a new task row and returns its ID.
 // projectID is passed explicitly to avoid circular subquery.
 func (e *Engine) createTask(ctx context.Context, title, taskType, projectID, status string, config json.RawMessage) (string, error) {
+	log.Printf("[workflow] createTask: title=%q taskType=%q", title, taskType)
 	var id string
 	err := e.db.GetContext(ctx, &id,
 		`INSERT INTO tasks (title, task_type, status, project_id)
@@ -521,8 +530,24 @@ func (c phaseConfigMap) GetBool(key string) bool {
 
 // ─── Package-level functions (used by cmd/server) ─────────────────────────────
 
-// StartWorkflow creates and starts a new workflow
-func (e *Engine) StartWorkflow(name, projectID string, phaseConfigs []PhaseConfig) (*Workflow, error) {
+// StartWorkflow creates a workflow from a template and activates the first phase.
+func (e *Engine) StartWorkflow(templateID, name, projectID, description, variables string) (*Workflow, error) {
+	// Load template phases
+	var rawPhases []byte
+	err := e.db.Get(&rawPhases,
+		`SELECT phases FROM workflow_templates WHERE id = $1`, templateID)
+	if err != nil {
+		return nil, fmt.Errorf("template not found: %w", err)
+	}
+
+	var phaseConfigs []PhaseConfig
+	if err := json.Unmarshal(rawPhases, &phaseConfigs); err != nil {
+		return nil, fmt.Errorf("parse template phases: %w", err)
+	}
+	if len(phaseConfigs) == 0 {
+		return nil, fmt.Errorf("template has no phases")
+	}
+
 	tx, err := e.db.Beginx()
 	if err != nil {
 		return nil, fmt.Errorf("begin: %w", err)
@@ -532,35 +557,29 @@ func (e *Engine) StartWorkflow(name, projectID string, phaseConfigs []PhaseConfi
 	wfID := uuid.New().String()
 	var wf Workflow
 	err = tx.QueryRowx(
-		`INSERT INTO workflows (id, name, project_id, total_phases, status)
-		 VALUES ($1, $2, $3, $4, 'active')
-		 RETURNING id, project_id, name, total_phases, status`,
+		`INSERT INTO workflows (id, name, project_id, total_phases, status, current_phase)
+		 VALUES ($1, $2, $3, $4, 'active', 0)
+		 RETURNING id, project_id, name, total_phases, status, current_phase`,
 		wfID, name, projectID, len(phaseConfigs),
 	).StructScan(&wf)
 	if err != nil {
 		return nil, fmt.Errorf("insert workflow: %w", err)
 	}
 
-	firstPhaseID := uuid.New().String()
+	// Create all phases (pending), except first = active
 	for i, pc := range phaseConfigs {
-		phaseID := firstPhaseID
-		if i > 0 {
-			phaseID = uuid.New().String()
-		}
+		phaseID := uuid.New().String()
 		status := PhasePending
 		if i == 0 {
-			status = PhaseActive
+			status = PhaseRunning
 		}
 		_, err = tx.Exec(
-			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, status)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
-			phaseID, wf.ID, pc.Name, i, pc.Type, status,
+			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, task_type, status)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			phaseID, wf.ID, pc.Name, i, pc.Type, pc.TaskType, status,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("insert phase: %w", err)
-		}
-		if i == 0 {
-			firstPhaseID = phaseID
+			return nil, fmt.Errorf("insert phase %d: %w", i, err)
 		}
 	}
 
@@ -568,9 +587,15 @@ func (e *Engine) StartWorkflow(name, projectID string, phaseConfigs []PhaseConfi
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	// Activate first phase
-	firstPhase := &WorkflowPhase{ID: firstPhaseID, WorkflowID: wf.ID, PhaseType: phaseConfigs[0].Type}
-	if err := e.activatePhase(wf.ID, firstPhase, wf.ProjectID); err != nil {
+	// Load first phase from DB and activate it
+	var firstPhase WorkflowPhase
+	if err := e.db.Get(&firstPhase,
+		`SELECT * FROM workflow_phases WHERE workflow_id=$1 AND phase_index=0`, wf.ID); err != nil {
+		return nil, fmt.Errorf("load first phase: %w", err)
+	}
+	log.Printf("[workflow] first phase loaded: name=%s type=%s task_type=%s", firstPhase.PhaseName, firstPhase.PhaseType, firstPhase.TaskType)
+
+	if err := e.activatePhase(wf.ID, &firstPhase, wf.ProjectID); err != nil {
 		log.Printf("[workflow] activatePhase error: %v", err)
 	}
 
@@ -658,4 +683,60 @@ func ApproveGate(db *sqlx.DB, workflowID, phaseID string) error {
 // IsGatePhase returns true if the phase type is a gate
 func IsGatePhase(phaseType string) bool {
 	return phaseType == PhaseTypeGate
+}
+
+// ApproveGate approves a waiting-approval gate phase and advances to the next phase.
+func (e *Engine) ApproveGate(workflowID, note string) error {
+	// Find the waiting_approval phase
+	var phase WorkflowPhase
+	err := e.db.Get(&phase,
+		`SELECT * FROM workflow_phases WHERE workflow_id=$1 AND status=$2`,
+		workflowID, "waiting_approval")
+	if err != nil {
+		return fmt.Errorf("no gate phase waiting approval: %w", err)
+	}
+
+	// Mark gate as completed
+	_, err = e.db.Exec(
+		`UPDATE workflow_phases SET status=$1, updated_at=NOW() WHERE id=$2`,
+		PhaseCompleted, phase.ID)
+	if err != nil {
+		return fmt.Errorf("complete gate: %w", err)
+	}
+
+	log.Printf("[workflow] gate %s approved for workflow %s (note: %s)", phase.PhaseName, workflowID, note)
+
+	// Advance to next phase
+	return e.advanceWorkflow(workflowID)
+}
+
+// CreateTemplate inserts a new workflow template.
+func CreateTemplate(db *sqlx.DB, name, description string, phases []PhaseConfig) (*Template, error) {
+	phasesJSON, err := json.Marshal(phases)
+	if err != nil {
+		return nil, err
+	}
+	id := uuid.New().String()
+	_, err = db.Exec(
+		`INSERT INTO workflow_templates (id, name, description, phases) VALUES ($1, $2, $3, $4)`,
+		id, name, description, phasesJSON)
+	if err != nil {
+		return nil, err
+	}
+	return &Template{ID: id, Name: name, Description: description, Phases: phasesJSON}, nil
+}
+
+// ListTemplates returns all workflow templates.
+func ListTemplates(db *sqlx.DB) ([]Template, error) {
+	var templates []Template
+	err := db.Select(&templates, `SELECT id, name, description, phases FROM workflow_templates ORDER BY created_at DESC`)
+	return templates, err
+}
+
+// Template represents a workflow template.
+type Template struct {
+	ID          string          `db:"id" json:"id"`
+	Name        string          `db:"name" json:"name"`
+	Description string          `db:"description" json:"description"`
+	Phases      json.RawMessage `db:"phases" json:"phases"`
 }
