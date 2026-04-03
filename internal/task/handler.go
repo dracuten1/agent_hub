@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -43,8 +44,11 @@ func isValidTransition(from, to string) bool {
 }
 
 type Handler struct {
-	db  *sqlx.DB
-	hub *websocket.Hub
+	db               *sqlx.DB
+	hub              *websocket.Hub
+	WorkflowAdvancer interface {
+		CheckAndAdvancePhase(taskID string) error
+	}
 }
 
 type Task struct {
@@ -680,6 +684,15 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	}
 
 	h.broadcastTaskEvent(taskID, "task_updated", oldStatus, newStatus)
+
+	// Check if this task completion should advance the workflow phase
+	if newStatus == "done" || newStatus == "deployed" {
+		if h.WorkflowAdvancer != nil {
+			if err := h.WorkflowAdvancer.CheckAndAdvancePhase(taskID); err != nil {
+				log.Printf("[task] workflow advance error for %s: %v", taskID, err)
+			}
+		}
+	}
 
 	c.JSON(200, gin.H{"message": "Task completed", "new_status": newStatus})
 }

@@ -10,8 +10,8 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/tuyen/agenthub/internal/agent"
-	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/auth"
+	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/comment"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
@@ -22,6 +22,7 @@ import (
 	"github.com/tuyen/agenthub/internal/task"
 	"github.com/tuyen/agenthub/internal/version"
 	"github.com/tuyen/agenthub/internal/websocket"
+	"github.com/tuyen/agenthub/internal/workflow"
 	"github.com/tuyen/agenthub/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -129,12 +130,16 @@ func main() {
 		public.GET("/ws", wsHandler.HandleWS)
 	}
 
+	// Workflow engine (created early so task handlers can reference it)
+	wfEngine := workflow.NewEngine(database)
+
 	// Agent routes (API key auth) — registration excluded (chicken-and-egg)
 	agentGroup := r.Group("/api/agent")
 	agentGroup.Use(agentMiddleware)
 	{
 		agentHandler := agent.NewHandler(database)
 		taskHandler := task.NewHandler(database, wsHub)
+		taskHandler.WorkflowAdvancer = wfEngine
 
 		agentHandler.RegisterRoutes(agentGroup)
 		agentHandler.RegisterAgentRoutes(agentGroup)
@@ -152,6 +157,7 @@ func main() {
 		projectHandler := project.NewHandler(database)
 		featureHandler := feature.NewHandler(database)
 		taskHandler := task.NewHandler(database, wsHub)
+		taskHandler.WorkflowAdvancer = wfEngine
 		reviewHandler := review.NewHandler(database)
 		agentHandler := agent.NewHandler(database)
 
@@ -161,6 +167,9 @@ func main() {
 		commentHandler.RegisterUserRoutes(user)
 		reviewHandler.RegisterRoutes(user)
 		agentHandler.RegisterUserRoutes(user)
+
+		// Workflow engine routes
+		workflow.RegisterRoutes(r, database, wfEngine)
 	}
 
 	// Start health monitor
