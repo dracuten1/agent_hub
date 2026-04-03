@@ -45,6 +45,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			log.Println("[Bridge] Shutting down")
 			return nil
 		case <-ticker.C:
+			b.sendHeartbeat("idle")
 			if err := b.pollAndProcess(ctx); err != nil {
 				log.Printf("[Bridge] Error: %v", err)
 			}
@@ -221,4 +222,23 @@ func (b *Bridge) reportResult(taskID string, result *TaskResult, buildOK bool) e
 	}
 	log.Printf("[Bridge] Reported: %s → %s", taskID, status)
 	return nil
+}
+
+// sendHeartbeat sends a heartbeat to AgentHub to keep the agent alive.
+func (b *Bridge) sendHeartbeat(status string) {
+	url := fmt.Sprintf("%s/api/agent/heartbeat", b.cfg.APIURL)
+	payload := map[string]interface{}{"status": status, "active_tasks": []string{}}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+b.cfg.AgentToken)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		log.Printf("[Bridge] Heartbeat failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
 }

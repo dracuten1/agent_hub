@@ -158,6 +158,8 @@ func (h *Handler) GetQueue(c *gin.Context) {
 			taskTypeFilter = "'dev', 'general'"
 		case "design":
 			taskTypeFilter = "'plan', 'design', 'general'"
+		case "designer":
+			taskTypeFilter = "'plan', 'design', 'general'"
 		case "review":
 			taskTypeFilter = "'review', 'general'"
 		case "test":

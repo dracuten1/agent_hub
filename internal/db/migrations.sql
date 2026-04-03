@@ -197,3 +197,79 @@ DROP TRIGGER IF EXISTS trg_dep_added ON task_dependencies;
 CREATE TRIGGER trg_dep_added
     AFTER INSERT ON task_dependencies
     FOR EACH ROW EXECUTE FUNCTION fn_dep_added();
+
+-- fn_task_completed: update phase counts and advance workflow when task completes
+CREATE OR REPLACE FUNCTION fn_task_completed()
+RETURNS TRIGGER AS $$
+DECLARE
+    dep_id TEXT;
+    v_phase_id TEXT;
+    v_workflow_id TEXT;
+    v_total_tasks INT;
+    v_completed_tasks INT;
+    v_next_phase_id TEXT;
+    v_next_phase_type TEXT;
+BEGIN
+    -- Update phase task counts
+    SELECT wtm.phase_id, wp.workflow_id
+      INTO v_phase_id, v_workflow_id
+      FROM workflow_task_map wtm
+      JOIN workflow_phases wp ON wp.id = wtm.phase_id
+     WHERE wtm.task_id = NEW.id;
+
+    IF v_phase_id IS NOT NULL THEN
+        UPDATE workflow_phases
+           SET completed_tasks = completed_tasks + 1
+         WHERE id = v_phase_id;
+
+        -- Check if all tasks in this phase are done
+        SELECT completed_tasks, total_tasks
+          INTO v_completed_tasks, v_total_tasks
+          FROM workflow_phases WHERE id = v_phase_id;
+
+        IF v_completed_tasks >= v_total_tasks AND v_total_tasks > 0 THEN
+            -- Mark current phase as completed
+            UPDATE workflow_phases SET status = 'completed', updated_at = NOW() WHERE id = v_phase_id;
+
+            -- Get next phase
+            SELECT id, phase_type
+              INTO v_next_phase_id, v_next_phase_type
+              FROM workflow_phases
+             WHERE workflow_id = v_workflow_id
+               AND phase_index = (SELECT phase_index FROM workflow_phases WHERE id = v_phase_id) + 1;
+
+            IF v_next_phase_id IS NOT NULL THEN
+                -- Activate next phase
+                UPDATE workflow_phases SET status = 'running', updated_at = NOW() WHERE id = v_next_phase_id;
+            ELSE
+                -- No more phases — workflow complete
+                UPDATE workflows SET status = 'completed', updated_at = NOW() WHERE id = v_workflow_id;
+            END IF;
+        END IF;
+    END IF;
+
+    -- Resolve dependencies
+    FOR dep_id IN
+        SELECT td.task_id FROM task_dependencies td WHERE td.depends_on_id = NEW.id
+    LOOP
+        UPDATE tasks t
+           SET pending_deps = GREATEST(t.pending_deps - 1, 0),
+               status       = CASE
+                                  WHEN t.pending_deps = 1 AND t.status = 'blocked'
+                                  THEN 'available'
+                                  ELSE t.status
+                              END,
+               updated_at   = NOW()
+         WHERE t.id = dep_id;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_task_completed ON tasks;
+CREATE TRIGGER trg_task_completed
+    AFTER UPDATE OF status ON tasks
+    FOR EACH ROW
+    WHEN (NEW.status IN ('done', 'deployed') AND OLD.status NOT IN ('done', 'deployed'))
+    EXECUTE FUNCTION fn_task_completed();
