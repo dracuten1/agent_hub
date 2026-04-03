@@ -1,27 +1,14 @@
 package workflow
 
 import (
-	"bytes"
-	"encoding/json"
 	"log"
-	"net/http"
-	"time"
 )
 
+// SendGateNotification logs gate approval requirement.
+// Gate notifications are handled by the PM Pipeline Monitor cron
+// which polls for waiting_approval phases periodically.
 func SendGateNotification(workflowID, phaseID, phaseName string) {
-	payload := map[string]interface{}{
-		"text": "Gate approval needed: " + phaseName + " (workflow " + workflowID + ")",
-		"mode": "now",
-	}
-	body, _ := json.Marshal(payload)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://127.0.0.1:9000/api/cron/wake", "application/json", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("[workflow] gate notification failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-	log.Printf("[workflow] gate notification sent: workflow=%s phase=%s", workflowID, phaseName)
+	log.Printf("[workflow] gate approval required: workflow=%s phase=%q", workflowID, phaseName)
 }
 
 func SendEscalationNotification(workflowID, taskID string) {
