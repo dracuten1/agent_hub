@@ -1,3 +1,7 @@
+-- ============================================================================
+-- AgentHub Database Schema
+-- ============================================================================
+
 -- 001_users.sql
 CREATE TABLE IF NOT EXISTS users (
     id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -75,7 +79,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_by      TEXT REFERENCES users(id),
     user_id         TEXT REFERENCES users(id),
     created_at      TIMESTAMP DEFAULT NOW(),
-    updated_at      TIMESTAMP DEFAULT NOW()
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    -- 010: stale task tracking
+    release_count   INT DEFAULT 0,
+    -- dependency tracking
+    pending_deps    INT DEFAULT 0
 );
 
 -- 006_task_events.sql
@@ -101,6 +109,56 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at  TIMESTAMP DEFAULT NOW()
 );
 
+-- 008_task_dependencies.sql
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id              BIGSERIAL PRIMARY KEY,
+    task_id         TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    depends_on_id   TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    UNIQUE(task_id, depends_on_id)
+);
+
+-- ============================================================================
+-- Workflow Tables
+-- ============================================================================
+
+-- workflows: top-level workflow instances
+CREATE TABLE IF NOT EXISTS workflows (
+    id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name        VARCHAR(200) NOT NULL,
+    project_id  TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    total_phases INT NOT NULL DEFAULT 0,
+    status      VARCHAR(30) DEFAULT 'active',
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+);
+
+-- workflow_phases: individual phases within a workflow
+CREATE TABLE IF NOT EXISTS workflow_phases (
+    id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    workflow_id TEXT REFERENCES workflows(id) ON DELETE CASCADE,
+    phase_name  VARCHAR(200) NOT NULL,
+    phase_index INT NOT NULL DEFAULT 0,
+    phase_type  VARCHAR(30) NOT NULL DEFAULT 'general',
+    status      VARCHAR(30) DEFAULT 'pending',
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+);
+
+-- workflow_task_map: maps tasks to workflow phases
+CREATE TABLE IF NOT EXISTS workflow_task_map (
+    id          BIGSERIAL PRIMARY KEY,
+    task_id     TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+    workflow_id TEXT REFERENCES workflows(id) ON DELETE CASCADE,
+    phase_id    TEXT REFERENCES workflow_phases(id) ON DELETE SET NULL,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    UNIQUE(task_id)
+);
+
+-- ============================================================================
+-- Indexes
+-- ============================================================================
+
 -- 008_indexes.sql
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
@@ -121,4 +179,21 @@ CREATE INDEX IF NOT EXISTS idx_tasks_task_type ON tasks(task_type);
 CREATE INDEX IF NOT EXISTS idx_tasks_stale_check
   ON tasks (status, claimed_at, updated_at)
   WHERE status IN ('claimed', 'in_progress');
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS release_count INT DEFAULT 0;
+
+-- ============================================================================
+-- Triggers
+-- ============================================================================
+
+-- fn_dep_added: increment pending_deps when dependency added
+CREATE OR REPLACE FUNCTION fn_dep_added()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE tasks SET pending_deps = pending_deps + 1 WHERE id = NEW.task_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_dep_added ON task_dependencies;
+CREATE TRIGGER trg_dep_added
+    AFTER INSERT ON task_dependencies
+    FOR EACH ROW EXECUTE FUNCTION fn_dep_added();
