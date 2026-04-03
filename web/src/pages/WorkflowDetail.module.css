@@ -1,0 +1,10 @@
+.center { text-align: center; padding: 48px; color: var(--text-muted); }
+.backBtn { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 8px 14px; font-size: 13px; transition: all var(--transition); }
+.backBtn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.summaryBar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 24px; }
+.pipelineScroll { overflow-x: auto; padding-bottom: 8px; }
+.approveBar { margin-top: 24px; background: var(--warning-muted); border: 1px solid var(--warning); border-radius: var(--radius-lg); padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.approveBar p { font-size: 13px; color: var(--warning); }
+.approveBtn { background: var(--warning); color: #000; border-radius: var(--radius-md); padding: 9px 18px; font-size: 13px; font-weight: 700; transition: opacity var(--transition); }
+.approveBtn:hover { opacity: 0.85; }
+.approveBtn:disabled { opacity: 0.5; cursor: not-allowed; }

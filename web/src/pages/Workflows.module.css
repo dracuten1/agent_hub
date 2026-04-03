@@ -1,0 +1,20 @@
+.center { text-align: center; padding: 48px; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border-radius: var(--radius-md); padding: 8px 16px; font-size: 13px; font-weight: 600; transition: opacity var(--transition); }
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cancelBtn { background: var(--bg-tertiary); color: var(--text-secondary); border-radius: var(--radius-md); padding: 8px 16px; font-size: 13px; }
+.createForm { background: var(--bg-secondary); border: 1px solid var(--accent); border-radius: var(--radius-lg); padding: 18px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 12px; }
+.formRow { display: flex; gap: 8px; flex-wrap: wrap; }
+.formRow > * { flex: 1; min-width: 140px; }
+.input, .select { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 9px 12px; color: var(--text-primary); font-size: 13px; transition: border-color var(--transition); }
+.input:focus, .select:focus { border-color: var(--accent); outline: none; }
+.select { cursor: pointer; }
+.error { font-size: 12px; color: var(--error); }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; transition: border-color var(--transition); }
+.row:hover { border-color: var(--accent); background: var(--bg-tertiary); }
+.rowLeft { display: flex; flex-direction: column; gap: 3px; }
+.wfName { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.wfMeta { font-size: 11px; color: var(--text-muted); }
+.rowRight { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.mini { width: 80px; }

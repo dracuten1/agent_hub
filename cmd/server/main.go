@@ -11,8 +11,8 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/tuyen/agenthub/internal/agent"
 	"github.com/tuyen/agenthub/internal/auth"
-	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/comment"
+	"github.com/tuyen/agenthub/internal/dashboard"
 	"github.com/tuyen/agenthub/internal/db"
 	"github.com/tuyen/agenthub/internal/feature"
 	"github.com/tuyen/agenthub/internal/health"
@@ -181,7 +181,26 @@ func main() {
 	go task.StartStaleTaskMonitor(ctx, database, wsHub)
 
 	log.Printf("AgentHub starting on :%s", port)
+
+	// Serve React app from web/dist/
+	serveApp(r)
+
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func serveApp(r *gin.Engine) {
+	distDir := "./web/dist"
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		filePath := distDir + path
+		// Check if file exists, if not serve index.html for SPA routing
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			c.File(distDir + "/index.html")
+			return
+		}
+		c.File(filePath)
+	})
+	log.Println("[app] React SPA served from web/dist")
 }

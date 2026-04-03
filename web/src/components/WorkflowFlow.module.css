@@ -1,0 +1,4 @@
+.flow { display: flex; align-items: flex-start; gap: 0; }
+.step { display: flex; align-items: center; }
+.connector { width: 40px; height: 2px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
+.connector.done { background: var(--success); }

@@ -1,0 +1,33 @@
+.center { text-align: center; padding: 48px; color: var(--text-muted); }
+.statsGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
+@media (min-width: 640px) { .statsGrid { grid-template-columns: repeat(4, 1fr); } }
+.stat {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 18px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+  border-left: 3px solid var(--c);
+}
+.statVal { font-size: 28px; font-weight: 700; color: var(--c); line-height: 1; }
+.statLbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.grid { display: grid; gap: 16px; }
+@media (min-width: 768px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+.card {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 18px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.cardTitle { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+.row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.row:last-child { border-bottom: none; }
+.rowVal { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.taskList { display: flex; flex-direction: column; gap: 2px; }
+.taskTitle { flex: 1; font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.dot[data-s="idle"]    { background: var(--success); }
+.dot[data-s="busy"]    { background: var(--accent); }
+.dot[data-s="offline"] { background: var(--error); }
+.agentName { flex: 1; font-size: 13px; color: var(--text-primary); }
+.agentTasks { font-size: 11px; color: var(--text-muted); }

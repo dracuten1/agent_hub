@@ -1,0 +1,62 @@
+:root {
+  /* Brand */
+  --bg-primary:    #0c0e14;
+  --bg-secondary:  #13151f;
+  --bg-tertiary:   #1a1d2e;
+  --bg-elevated:   #212438;
+  --bg-hover:      #282c44;
+
+  /* Accent */
+  --accent:        #8b5cf6;
+  --accent-hover:  #a78bfa;
+  --accent-muted:  rgba(139, 92, 246, 0.12);
+  --accent-glow:   rgba(139, 92, 246, 0.25);
+
+  /* Text */
+  --text-primary:  #e2e8f0;
+  --text-secondary:#94a3b8;
+  --text-muted:   #64748b;
+  --text-accent:  #c4b5fd;
+
+  /* Status */
+  --success:      #10b981;
+  --success-muted:rgba(16, 185, 129, 0.12);
+  --warning:      #f59e0b;
+  --warning-muted:rgba(245, 158, 11, 0.12);
+  --error:        #ef4444;
+  --error-muted:  rgba(239, 68, 68, 0.12);
+  --info:         #3b82f6;
+  --info-muted:   rgba(59, 130, 246, 0.12);
+
+  /* Borders */
+  --border:       #1e2235;
+  --border-subtle:#161929;
+  --border-accent:rgba(139, 92, 246, 0.35);
+
+  /* Layout */
+  --sidebar-width: 220px;
+  --topbar-height: 56px;
+  --tabbar-height: 64px;
+
+  /* Radius */
+  --radius-sm:  6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Shadow */
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg:  0 8px 24px rgba(0,0,0,0.6);
+  --shadow-glow:0 0 20px var(--accent-glow);
+
+  /* Transitions */
+  --transition: 150ms ease;
+  --transition-md: 250ms ease;
+
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}

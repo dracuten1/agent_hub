@@ -1,0 +1,23 @@
+.node {
+  width: 200px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.node.current { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-glow); }
+.node.completed { border-color: var(--success); }
+.node.failed { border-color: var(--error); }
+.node.pending, .node.skipped { opacity: 0.7; }
+
+.header { display: flex; align-items: center; gap: 7px; }
+.icon { flex-shrink: 0; color: var(--text-muted); }
+.node.completed .icon { color: var(--success); }
+.node.running .icon { color: var(--accent); }
+.node.failed .icon { color: var(--error); }
+
+.name { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }

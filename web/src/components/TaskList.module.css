@@ -1,0 +1,5 @@
+.list { display: flex; flex-direction: column; gap: 4px; }
+.item { display: flex; align-items: center; gap: 6px; }
+.title { flex: 1; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assignee { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.more { font-size: 10px; color: var(--text-muted); padding: 2px 0; }

@@ -34,6 +34,7 @@ func RegisterRoutes(r gin.IRouter, db *sqlx.DB, engine *Engine) {
 	g.GET("", h.ListWorkflows)
 	g.GET("/templates", h.ListTemplates)
 	g.POST("/templates", h.CreateTemplate)
+	g.DELETE("/:id", h.DeleteWorkflow)
 }
 
 // ─── Request types ─────────────────────────────────────────────────────────
@@ -343,4 +344,29 @@ func (h *Handler) ListTemplates(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"templates": templates})
+}
+
+// ─── DELETE /api/workflows/:id ──────────────────────────────────────────────
+
+func (h *Handler) DeleteWorkflow(c *gin.Context) {
+	workflowID := c.Param("id")
+
+	// Check existence
+	var wf Workflow
+	if err := h.db.Get(&wf, `SELECT id FROM workflows WHERE id=$1`, workflowID); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	// Delete workflow — cascade deletes phases and task_map rows
+	if _, err := h.db.Exec(`DELETE FROM workflows WHERE id=$1`, workflowID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "workflow deleted"})
 }
