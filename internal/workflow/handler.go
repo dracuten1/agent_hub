@@ -78,7 +78,12 @@ func (h *Handler) StartWorkflow(c *gin.Context) {
 		return
 	}
 
-	wf, err := h.engine.StartWorkflow(templateID, req.Name, req.ProjectID, req.Description, "")
+	var variables string
+	if len(req.Variables) > 0 {
+		b, _ := json.Marshal(req.Variables)
+		variables = string(b)
+	}
+	wf, err := h.engine.StartWorkflow(templateID, req.Name, req.ProjectID, req.Description, variables)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

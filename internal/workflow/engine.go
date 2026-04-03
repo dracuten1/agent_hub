@@ -80,12 +80,14 @@ type WorkflowPhase struct {
 
 // Workflow represents a workflow instance
 type Workflow struct {
-	ID           string `db:"id" json:"id"`
-	ProjectID    string `db:"project_id" json:"project_id"`
-	Name         string `db:"name" json:"name"`
-	TotalPhases  int    `db:"total_phases" json:"total_phases"`
-	Status       string `db:"status" json:"status"`
-	CurrentPhase int    `db:"current_phase" json:"current_phase"`
+	ID           string          `db:"id" json:"id"`
+	ProjectID    string          `db:"project_id" json:"project_id"`
+	Name         string          `db:"name" json:"name"`
+	TotalPhases  int             `db:"total_phases" json:"total_phases"`
+	Status       string          `db:"status" json:"status"`
+	CurrentPhase int             `db:"current_phase" json:"current_phase"`
+	Description  string          `db:"description" json:"description"`
+	Variables    json.RawMessage `db:"variables" json:"variables"`
 }
 
 // PhaseConfig represents configuration for a workflow phase
@@ -108,16 +110,16 @@ func NewEngine(db *sqlx.DB) *Engine {
 }
 
 // activatePhase activates a workflow phase and creates its tasks based on phase type.
-func (e *Engine) activatePhase(workflowID string, phase *WorkflowPhase, projectID string) error {
+func (e *Engine) activatePhase(workflowID string, phase *WorkflowPhase, projectID string, wfDescription string) error {
 	ctx := context.Background()
 
 	switch phase.PhaseType {
 	case PhaseTypeSingle:
-		return e.createSinglePhaseTasks(ctx, workflowID, projectID, phase)
+		return e.createSinglePhaseTasks(ctx, workflowID, projectID, phase, wfDescription)
 	case PhaseTypeMulti:
-		return e.createMultiPhaseTasks(ctx, workflowID, projectID, phase)
+		return e.createMultiPhaseTasks(ctx, workflowID, projectID, phase, wfDescription)
 	case PhaseTypePerDev:
-		return e.createPerDevPhaseTasks(ctx, workflowID, projectID, phase)
+		return e.createPerDevPhaseTasks(ctx, workflowID, projectID, phase, wfDescription)
 	case PhaseTypeGate:
 		return e.enterGatePhase(ctx, workflowID, phase)
 	case PhaseTypeDecision:
@@ -135,8 +137,8 @@ func (e *Engine) activatePhase(workflowID string, phase *WorkflowPhase, projectI
 }
 
 // createSinglePhaseTasks creates one task for a "single" phase type.
-func (e *Engine) createSinglePhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase) error {
-	title := e.renderTemplate(phase.Config, "task_title_template", wfID)
+func (e *Engine) createSinglePhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase, wfDescription string) error {
+	title := e.renderTemplate(string(phase.Config), "task_title_template", wfID)
 	if title == "" {
 		title = fmt.Sprintf("%s: %s", phase.PhaseName, wfID)
 	}
@@ -146,7 +148,8 @@ func (e *Engine) createSinglePhaseTasks(ctx context.Context, wfID, projectID str
 		taskType = "dev"
 	}
 
-	taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Config)
+	desc := e.buildTaskDescription(wfDescription, phase.PhaseName, taskType, "")
+	taskID, err := e.createTask(ctx, title, taskType, projectID, "available", desc)
 	if err != nil {
 		return fmt.Errorf("createSinglePhaseTasks: create task: %w", err)
 	}
@@ -161,20 +164,21 @@ func (e *Engine) createSinglePhaseTasks(ctx context.Context, wfID, projectID str
 }
 
 // createMultiPhaseTasks creates N parallel tasks for a "multi" phase type.
-func (e *Engine) createMultiPhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase) error {
+func (e *Engine) createMultiPhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase, wfDescription string) error {
 	cfg := parsePhaseConfig(phase.Config)
 	count := cfg.GetInt("count")
 	if count <= 0 {
 		count = 1
 	}
-	titles := e.renderMultiTitles(phase.Config, "task_title_template", wfID, count)
+	titles := e.renderMultiTitles(string(phase.Config), "task_title_template", wfID, count)
 
 	for _, title := range titles {
 		taskType := phase.TaskType
 		if taskType == "" {
 			taskType = "dev"
 		}
-		taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Config)
+		desc := e.buildTaskDescription(wfDescription, phase.PhaseName, taskType, "")
+		taskID, err := e.createTask(ctx, title, taskType, projectID, "available", desc)
 		if err != nil {
 			return fmt.Errorf("createMultiPhaseTasks: create task: %w", err)
 		}
@@ -192,7 +196,7 @@ func (e *Engine) createMultiPhaseTasks(ctx context.Context, wfID, projectID stri
 // createPerDevPhaseTasks creates one follow-up task for each completed task
 // from the previous phase. Dependencies are set via task_dependencies table;
 // fn_dep_added trigger handles pending_deps increment.
-func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase) error {
+func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID string, phase *WorkflowPhase, wfDescription string) error {
 	// Find the previous phase index
 	prevPhaseIndex := phase.PhaseIndex - 1
 
@@ -234,7 +238,8 @@ func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID str
 			title = fmt.Sprintf("%s: %s", phase.PhaseName, prev.Title)
 		}
 
-		taskID, err := e.createTask(ctx, title, taskType, projectID, "blocked", phase.Config)
+		desc := e.buildTaskDescription(wfDescription, phase.PhaseName, taskType, prev.Title)
+		taskID, err := e.createTask(ctx, title, taskType, projectID, "blocked", desc)
 		if err != nil {
 			return fmt.Errorf("createPerDevPhaseTasks: create task: %w", err)
 		}
@@ -397,9 +402,10 @@ func (e *Engine) advanceWorkflow(wfID string) error {
 		PhaseType: next.PhaseType, TaskType: next.TaskType,
 		Config: json.RawMessage(next.Config),
 	}
-	var projectID string
+	var projectID, wfDescription string
 	e.db.Get(&projectID, `SELECT project_id FROM workflows WHERE id=$1`, wfID)
-	return e.activatePhase(wfID, nextPhase, projectID)
+	e.db.Get(&wfDescription, `SELECT COALESCE(description,'') FROM workflows WHERE id=$1`, wfID)
+	return e.activatePhase(wfID, nextPhase, projectID, wfDescription)
 }
 
 // retryPreviousPhase recreates failed tasks from the previous phase.
@@ -449,18 +455,69 @@ func (e *Engine) sendGateNotification(wfID string, phase *WorkflowPhase, approve
 
 // createTask inserts a new task row and returns its ID.
 // projectID is passed explicitly to avoid circular subquery.
-func (e *Engine) createTask(ctx context.Context, title, taskType, projectID, status string, config json.RawMessage) (string, error) {
+func (e *Engine) createTask(ctx context.Context, title, taskType, projectID, status string, description string) (string, error) {
 	log.Printf("[workflow] createTask: title=%q taskType=%q", title, taskType)
 	var id string
 	err := e.db.GetContext(ctx, &id,
-		`INSERT INTO tasks (title, task_type, status, project_id)
-		 VALUES ($1, $2, $3, NULLIF($4, ''))
+		`INSERT INTO tasks (title, description, task_type, status, project_id)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 		 RETURNING id`,
-		title, taskType, status, projectID)
+		title, description, taskType, status, projectID)
 	if err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// buildTaskDescription constructs a task description from workflow context.
+// Includes the workflow description (feature request) and phase-specific instructions.
+func (e *Engine) buildTaskDescription(wfDescription, phaseName, taskType, parentTitle string) string {
+	var sb strings.Builder
+
+	if wfDescription != "" {
+		sb.WriteString("## Feature / Requirement\n")
+		sb.WriteString(wfDescription)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("## Phase: %s\n", phaseName))
+
+	switch taskType {
+	case "plan", "design":
+		sb.WriteString("Create a detailed design specification for this feature. Include:\n")
+		sb.WriteString("- Architecture decisions and component diagram\n")
+		sb.WriteString("- API endpoints (if applicable)\n")
+		sb.WriteString("- Data model changes\n")
+		sb.WriteString("- Implementation tasks breakdown\n")
+		sb.WriteString("- Acceptance criteria\n")
+	case "dev":
+		sb.WriteString("Implement the assigned part of the feature according to the design spec.\n")
+		if parentTitle != "" {
+			sb.WriteString(fmt.Sprintf("Focus area: %s\n", parentTitle))
+		}
+		sb.WriteString("Follow the existing code style and conventions.\n")
+	case "review":
+		sb.WriteString("Review the code changes for:\n")
+		sb.WriteString("- Correctness and completeness\n")
+		sb.WriteString("- Code quality and conventions\n")
+		sb.WriteString("- Potential bugs or edge cases\n")
+		if parentTitle != "" {
+			sb.WriteString(fmt.Sprintf("Reviewing: %s\n", parentTitle))
+		}
+	case "test":
+		sb.WriteString("Validate the implementation:\n")
+		sb.WriteString("- Verify all acceptance criteria are met\n")
+		sb.WriteString("- Test edge cases\n")
+		if parentTitle != "" {
+			sb.WriteString(fmt.Sprintf("Testing: %s\n", parentTitle))
+		}
+	case "deploy":
+		sb.WriteString("Deploy the completed feature.\n")
+		sb.WriteString("- Verify build passes\n")
+		sb.WriteString("- Run final checks\n")
+	}
+
+	return sb.String()
 }
 
 // addWorkflowMapping records the task→workflow→phase association.
@@ -474,9 +531,9 @@ func (e *Engine) addWorkflowMapping(ctx context.Context, taskID, workflowID, pha
 }
 
 // renderTemplate substitutes placeholders in a string template.
-func (e *Engine) renderTemplate(config json.RawMessage, key, workflowID string) string {
+func (e *Engine) renderTemplate(config string, key, workflowID string) string {
 	var m map[string]interface{}
-	if err := json.Unmarshal(config, &m); err != nil {
+	if err := json.Unmarshal([]byte(config), &m); err != nil {
 		return ""
 	}
 	tpl, _ := m[key].(string)
@@ -485,9 +542,9 @@ func (e *Engine) renderTemplate(config json.RawMessage, key, workflowID string) 
 }
 
 // renderMultiTitles generates N task titles from a template string.
-func (e *Engine) renderMultiTitles(config json.RawMessage, key, workflowID string, count int) []string {
+func (e *Engine) renderMultiTitles(config string, key, workflowID string, count int) []string {
 	var m map[string]interface{}
-	_ = json.Unmarshal(config, &m)
+	_ = json.Unmarshal([]byte(config), &m)
 	tpl, _ := m[key].(string)
 	if tpl == "" {
 		tpl = "{workflow_id} task"
@@ -575,10 +632,10 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 	wfID := uuid.New().String()
 	var wf Workflow
 	err = tx.QueryRowx(
-		`INSERT INTO workflows (id, name, project_id, total_phases, status, current_phase)
-		 VALUES ($1, $2, $3, $4, 'active', 0)
-		 RETURNING id, project_id, name, total_phases, status, current_phase`,
-		wfID, name, projectID, len(phaseConfigs),
+		`INSERT INTO workflows (id, name, project_id, total_phases, status, current_phase, description, variables)
+		 VALUES ($1, $2, $3, $4, 'active', 0, $5, $6)
+		 RETURNING id, project_id, name, total_phases, status, current_phase, description, variables`,
+		wfID, name, projectID, len(phaseConfigs), description, variables,
 	).StructScan(&wf)
 	if err != nil {
 		return nil, fmt.Errorf("insert workflow: %w", err)
@@ -615,7 +672,7 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 	}
 	log.Printf("[workflow] first phase loaded: name=%s type=%s task_type=%s", firstPhase.PhaseName, firstPhase.PhaseType, firstPhase.TaskType)
 
-	if err := e.activatePhase(wf.ID, &firstPhase, wf.ProjectID); err != nil {
+	if err := e.activatePhase(wf.ID, &firstPhase, wf.ProjectID, wf.Description); err != nil {
 		log.Printf("[workflow] activatePhase error: %v", err)
 	}
 

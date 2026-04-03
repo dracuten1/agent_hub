@@ -239,3 +239,7 @@ CREATE TRIGGER trg_task_completed
     FOR EACH ROW
     WHEN (NEW.status IN ('done', 'deployed') AND OLD.status NOT IN ('done', 'deployed'))
     EXECUTE FUNCTION fn_task_completed();
+
+-- Workflow description and variables for task context
+ALTER TABLE workflows ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE workflows ADD COLUMN IF NOT EXISTS variables JSONB DEFAULT '{}';
