@@ -48,6 +48,7 @@ type Handler struct {
 	hub              *websocket.Hub
 	WorkflowAdvancer interface {
 		CheckAndAdvancePhase(taskID string) error
+		CreateWorkflowTestTask(taskID string) error
 	}
 }
 
@@ -737,6 +738,13 @@ func (h *Handler) ReviewTask(c *gin.Context) {
 		}
 		h.logEvent(taskID, agentNameStr, "reviewed", oldStatus, "test", "Review passed")
 		h.broadcastTaskEvent(taskID, "task_updated", oldStatus, "test")
+
+		// Auto-create test task for testing phase
+		if h.WorkflowAdvancer != nil {
+			if err := h.WorkflowAdvancer.CreateWorkflowTestTask(taskID); err != nil {
+				log.Printf("[task] CreateWorkflowTestTask error for %s: %v", taskID, err)
+			}
+		}
 
 		c.JSON(200, gin.H{"message": "Review passed", "new_status": "test"})
 

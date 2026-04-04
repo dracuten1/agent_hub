@@ -68,6 +68,7 @@ type WorkflowPhase struct {
 	TaskType       string          `db:"task_type" json:"task_type"`
 	Status         string          `db:"status" json:"status"`
 	Config         json.RawMessage `db:"config" json:"config,omitempty"`
+	Description    string          `db:"description" json:"description,omitempty"`
 	TotalTasks     int             `db:"total_tasks" json:"total_tasks"`
 	CompletedTasks int             `db:"completed_tasks" json:"completed_tasks"`
 	FailedTasks    int             `db:"failed_tasks" json:"failed_tasks"`
@@ -100,8 +101,8 @@ type Template struct {
 
 // PhaseConfig represents configuration for a workflow phase
 type PhaseConfig struct {
-	Type         string          `json:"type"`
-	Name         string          `json:"name"`
+	Type         string          `json:"phase_type"`
+	Name         string          `json:"phase_name"`
 	TaskType     string          `json:"task_type"`
 	Count        int             `json:"count"`
 	PassCondition string         `json:"pass_condition"`
@@ -157,7 +158,7 @@ func (e *Engine) createSinglePhaseTasks(ctx context.Context, wfID, projectID str
 	if taskType == "" {
 		taskType = "dev"
 	}
-	taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Config)
+	taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Description)
 	if err != nil {
 		return fmt.Errorf("createSinglePhaseTasks: create task: %w", err)
 	}
@@ -183,7 +184,7 @@ func (e *Engine) createMultiPhaseTasks(ctx context.Context, wfID, projectID stri
 		if taskType == "" {
 			taskType = "dev"
 		}
-		taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Config)
+		taskID, err := e.createTask(ctx, title, taskType, projectID, "available", phase.Description)
 		if err != nil {
 			return fmt.Errorf("createMultiPhaseTasks: create task: %w", err)
 		}
@@ -218,6 +219,19 @@ func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID str
 		return fmt.Errorf("createPerDevPhaseTasks: query prev tasks: %w", err)
 	}
 
+	// Skip if tasks already exist for this phase (idempotent — avoids duplicating
+	// review tasks already auto-queued by CheckAndAdvancePhase)
+	var existing int
+	e.db.GetContext(ctx, &existing,
+		`SELECT COUNT(*) FROM workflow_task_map WHERE phase_id = $1`, phase.ID)
+	if existing > 0 {
+		log.Printf("[workflow] per_dev phase %s already has tasks, skipping", phase.ID)
+		_, _ = e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseRunning, phase.ID)
+		return nil
+	}
+
 	if len(prevTasks) == 0 {
 		_, err = e.db.ExecContext(ctx,
 			`UPDATE workflow_phases SET status=$1,total_tasks=0,updated_at=NOW() WHERE id=$2`,
@@ -237,7 +251,9 @@ func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID str
 		if title == "" {
 			title = fmt.Sprintf("%s: %s", phase.PhaseName, prev.Title)
 		}
-		taskID, err := e.createTask(ctx, title, taskType, projectID, "blocked", phase.Config)
+		desc := fmt.Sprintf("Implement follow-up work for task %s (%s).\nPhase: %s\nTask type: %s",
+			prev.ID, prev.Title, phase.PhaseName, taskType)
+		taskID, err := e.createTask(ctx, title, taskType, projectID, "blocked", desc)
 		if err != nil {
 			return fmt.Errorf("createPerDevPhaseTasks: create task: %w", err)
 		}
@@ -362,7 +378,7 @@ func (e *Engine) advanceWorkflow(workflowID string) error {
 	var phase Phase
 	err := e.db.Get(&phase,
 		`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
-		        total_tasks, completed_tasks, failed_tasks, config, created_at, updated_at
+		        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
 		 FROM workflow_phases
 		 WHERE workflow_id = $1 AND status = $2
 		 ORDER BY phase_index ASC LIMIT 1`,
@@ -390,7 +406,7 @@ func (e *Engine) advanceWorkflow(workflowID string) error {
 		var next Phase
 		err := e.db.Get(&next,
 			`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
-			        total_tasks, completed_tasks, failed_tasks, config, created_at, updated_at
+			        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
 			 FROM workflow_phases
 			 WHERE workflow_id = $1 AND status = $2
 			 ORDER BY phase_index ASC LIMIT 1`,
@@ -496,13 +512,14 @@ func (e *Engine) sendGateNotification(wfID string, phase *WorkflowPhase, approve
 
 // createTask inserts a new task row and returns its ID.
 // projectID is passed explicitly to avoid circular subquery.
-func (e *Engine) createTask(ctx context.Context, title, taskType, projectID, status string, config json.RawMessage) (string, error) {
+// description is the task description string.
+func (e *Engine) createTask(ctx context.Context, title, taskType, projectID, status, description string) (string, error) {
 	var id string
 	err := e.db.GetContext(ctx, &id,
-		`INSERT INTO tasks (title, task_type, status, project_id)
-		 VALUES ($1, $2, $3, NULLIF($4, ''))
+		`INSERT INTO tasks (title, description, task_type, status, project_id)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 		 RETURNING id`,
-		title, taskType, status, projectID)
+		title, description, taskType, status, projectID)
 	if err != nil {
 		return "", err
 	}
@@ -517,6 +534,80 @@ func (e *Engine) addWorkflowMapping(ctx context.Context, taskID, workflowID, pha
 		 ON CONFLICT (task_id) DO UPDATE SET phase_id = EXCLUDED.phase_id`,
 		taskID, workflowID, phaseID)
 	return err
+}
+
+// CreateWorkflowTestTask creates a test task in the testing phase when a review passes.
+// Called from task handler after review verdict=pass.
+func (e *Engine) CreateWorkflowTestTask(reviewTaskID string) error {
+	ctx := context.Background()
+
+	// 1. Look up the review task info and its workflow/phase
+	var info struct {
+		Title      string `db:"title"`
+		WorkflowID string `db:"workflow_id"`
+		PhaseID    string `db:"phase_id"`
+		PhaseIndex int    `db:"phase_index"`
+	}
+	err := e.db.GetContext(ctx, &info,
+		`SELECT t.title, m.workflow_id, m.phase_id, p.phase_index
+		 FROM tasks t
+		 JOIN workflow_task_map m ON m.task_id = t.id
+		 JOIN workflow_phases p ON p.id = m.phase_id
+		 WHERE t.id = $1`,
+		reviewTaskID)
+	if err != nil {
+		return fmt.Errorf("CreateWorkflowTestTask: lookup review task: %w", err)
+	}
+
+	// 2. Find the next phase (testing phase = current phase index + 1)
+	var testPhase struct {
+		ID         string `db:"id"`
+		TotalTasks int    `db:"total_tasks"`
+	}
+	err = e.db.GetContext(ctx, &testPhase,
+		`SELECT id, total_tasks FROM workflow_phases
+		 WHERE workflow_id = $1 AND phase_index = $2`,
+		info.WorkflowID, info.PhaseIndex+1)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[workflow] no testing phase found for review task %s (workflow %s)", reviewTaskID, info.WorkflowID)
+			return nil // no testing phase = nothing to do
+		}
+		return fmt.Errorf("CreateWorkflowTestTask: lookup testing phase: %w", err)
+	}
+
+	// 3. Get workflow description for task context
+	var wfDesc string
+	e.db.GetContext(ctx, &wfDesc,
+		`SELECT COALESCE(description,'') FROM workflows WHERE id=$1`, info.WorkflowID)
+
+	// 4. Build test task description
+	desc := fmt.Sprintf("## Feature / Requirement\n%s\n\n## Testing Instructions\nValidate implementation for task %s (%s).\n- Run build and verify it passes\n- Check for regressions\n- Verify spec compliance", wfDesc, reviewTaskID, info.Title)
+
+	// 5. Create test task via createTask (projectID from workflow)
+	var projectID string
+	e.db.GetContext(ctx, &projectID,
+		`SELECT project_id FROM workflows WHERE id=$1`, info.WorkflowID)
+	testTaskID, err := e.createTask(ctx, "Test: "+info.Title, "test", projectID, "available", desc)
+	if err != nil {
+		return fmt.Errorf("CreateWorkflowTestTask: create test task: %w", err)
+	}
+
+	// 6. Map to workflow and testing phase
+	if err := e.addWorkflowMapping(ctx, testTaskID, info.WorkflowID, testPhase.ID); err != nil {
+		return fmt.Errorf("CreateWorkflowTestTask: add mapping: %w", err)
+	}
+
+	// 7. Increment total_tasks on testing phase
+	_, err = e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET total_tasks = total_tasks + 1, updated_at = NOW() WHERE id = $1`,
+		testPhase.ID)
+	if err != nil {
+		return fmt.Errorf("CreateWorkflowTestTask: update phase total_tasks: %w", err)
+	}
+
+	log.Printf("[workflow] test task %s created for review task %s in workflow %s", testTaskID, reviewTaskID, info.WorkflowID)
+	return nil
 }
 
 // renderTemplate substitutes placeholders in a string template.
@@ -697,9 +788,86 @@ func (e *Engine) CheckAndAdvancePhase(taskID string) error {
 		e.db.ExecContext(ctx,
 			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
 			PhaseCompleted, phaseID)
+
+		// Auto-queue follow-up tasks for per_dev / review phases in the next phase
+		e.autoQueueNextPhaseTasks(ctx, wfID, phaseID)
+
 		return e.advanceWorkflow(wfID)
 	}
 	return nil
+}
+
+// autoQueueNextPhaseTasks creates follow-up (e.g. review) tasks for the next phase
+// when the current phase completes. It is called from CheckAndAdvancePhase so that
+// review tasks are queued as dev tasks finish (rather than all at once when the
+// phase advances). It avoids duplicating work if createPerDevPhaseTasks also runs.
+func (e *Engine) autoQueueNextPhaseTasks(ctx context.Context, wfID, phaseID string) {
+	var next Phase
+	err := e.db.GetContext(ctx, &next,
+		`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
+		        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
+		 FROM workflow_phases
+		 WHERE workflow_id=$1 AND status=$2
+		 ORDER BY phase_index ASC LIMIT 1`,
+		wfID, PhasePending)
+	if err != nil {
+		return // no next phase
+	}
+
+	// Only queue for per_dev and review-type phases
+	if next.PhaseType != PhaseTypePerDev && next.PhaseType != "review" {
+		return
+	}
+
+	// Get current (just-completed) phase index and type
+	var current Phase
+	if err := e.db.GetContext(ctx, &current,
+		`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
+		        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
+		 FROM workflow_phases WHERE id=$1`, phaseID); err != nil {
+		return
+	}
+
+	// Get all tasks from the current (just-completed) phase
+	var completedDevTasks []struct {
+		ID    string `db:"id"`
+		Title string `db:"title"`
+	}
+	err = e.db.SelectContext(ctx, &completedDevTasks,
+		`SELECT t.id, t.title
+		 FROM tasks t
+		 JOIN workflow_task_map m ON m.task_id = t.id
+		 WHERE m.phase_id = $1 AND t.status IN ('done','deployed')`,
+		phaseID)
+	if err != nil || len(completedDevTasks) == 0 {
+		return
+	}
+
+	projectID := ""
+	e.db.GetContext(ctx, &projectID,
+		`SELECT project_id FROM workflows WHERE id=$1`, wfID)
+
+	for _, dev := range completedDevTasks {
+		title := fmt.Sprintf("Code Review: %s", dev.Title)
+		desc := fmt.Sprintf(
+			"Review code changes from task %s: %s. Check build, code quality, no regressions.",
+			dev.ID, dev.Title)
+		reviewTaskID, err := e.createTask(ctx, title, "review", projectID, "available", desc)
+		if err != nil {
+			log.Printf("[workflow] autoQueueNextPhaseTasks: create review task error: %v", err)
+			continue
+		}
+		if err := e.addWorkflowMapping(ctx, reviewTaskID, wfID, next.ID); err != nil {
+			log.Printf("[workflow] autoQueueNextPhaseTasks: add mapping error: %v", err)
+			continue
+		}
+		log.Printf("[workflow] auto-queued review task %s for dev task %s (%s)", reviewTaskID, dev.ID, wfID)
+	}
+
+	// Update next phase total_tasks count to reflect auto-queued tasks
+	e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET total_tasks=total_tasks+$1,updated_at=NOW() WHERE id=$2`,
+		len(completedDevTasks), next.ID)
 }
 
 // ApproveGate advances a gate phase that is waiting for approval.
@@ -709,7 +877,7 @@ func (e *Engine) ApproveGate(workflowID, note string) error {
 	var gate Phase
 	err := e.db.GetContext(ctx, &gate,
 		`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
-		        total_tasks, completed_tasks, failed_tasks, config, created_at, updated_at
+		        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
 		 FROM workflow_phases
 		 WHERE workflow_id=$1 AND status=$2`,
 		workflowID, PhaseWaitingApproval)
@@ -739,7 +907,7 @@ func (e *Engine) GetGatePhase(workflowID string) (*Phase, error) {
 	var phase Phase
 	err := e.db.Get(&phase,
 		`SELECT id, workflow_id, phase_name, phase_index, phase_type, status,
-		        total_tasks, completed_tasks, failed_tasks, config, created_at, updated_at
+		        total_tasks, completed_tasks, failed_tasks, config, description, created_at, updated_at
 		 FROM workflow_phases WHERE workflow_id=$1 AND status=$2`,
 		workflowID, PhaseWaitingApproval)
 	if err != nil {
