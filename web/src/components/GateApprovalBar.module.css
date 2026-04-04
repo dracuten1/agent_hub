@@ -1,0 +1,200 @@
+.bar {
+  margin-top: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gatePill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  background: var(--warning-muted);
+  color: var(--warning);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.summary strong { color: var(--text-primary); }
+.summary em { font-style: normal; color: var(--accent); }
+
+/* ── Task list ────────────────────────────────────────────────────────── */
+.taskList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.taskRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.taskTitle {
+  flex: 1;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assignee {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.previewSnippet {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.previewNone {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* ── Note ─────────────────────────────────────────────────────────────── */
+.noteWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.noteLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.noteOptional {
+  font-weight: 400;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.noteInput {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 56px;
+  transition: border-color var(--transition);
+  width: 100%;
+}
+
+.noteInput:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.noteInput::placeholder { color: var(--text-muted); }
+.noteInput:disabled { opacity: 0.5; }
+
+/* ── Error ────────────────────────────────────────────────────────────── */
+.error {
+  font-size: 12px;
+  color: var(--error);
+  background: var(--error-muted);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0;
+}
+
+/* ── Actions ──────────────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.approveBtn {
+  background: var(--success);
+  color: #000;
+  border-radius: var(--radius-md);
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  transition: opacity var(--transition);
+}
+.approveBtn:hover { opacity: 0.85; }
+.approveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rejectBtn {
+  background: var(--bg-tertiary);
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-md);
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background var(--transition);
+}
+.rejectBtn:hover { background: var(--error-muted); }
+.rejectBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Status pills ─────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.done    { background: var(--success-muted); color: var(--success); }
+.running { background: var(--accent-muted);  color: var(--accent); }
+.failed  { background: var(--error-muted);   color: var(--error); }
+.blocked { background: var(--warning-muted); color: var(--warning); }
+.muted   { background: var(--bg-elevated);  color: var(--text-muted); }

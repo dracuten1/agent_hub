@@ -37,6 +37,7 @@ export interface Task {
   id: string;
   title: string;
   description?: string;
+  result?: string;
   status: string;
   priority?: string;
   type?: string;

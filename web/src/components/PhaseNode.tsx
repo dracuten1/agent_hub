@@ -41,7 +41,7 @@ function TaskRow({ task }: { task: Task }) {
         </div>
       </div>
       <div className={`${styles.taskBody} ${open ? styles.taskBodyOpen : ''}`}>
-        <TaskArtifact description={task.description} result={(task as unknown as { result?: string }).result} />
+        <TaskArtifact task={task} />
       </div>
     </div>
   );

@@ -56,8 +56,10 @@ export const apiWorkflow = (id: string) => get<WorkflowDetailResponse>(`/workflo
 export const apiWorkflowTemplates = () => get<{ templates: WorkflowTemplate[] }>('/workflows/templates');
 export const apiStartWorkflow = (body: StartWorkflowBody) =>
   post<{ workflow: Workflow }>('/workflows/start', body);
-export const apiApproveWorkflow = (id: string) =>
-  post<{ message: string }>(`/workflows/${id}/approve`);
+export const apiApproveWorkflow = (id: string, note?: string) =>
+  post<{ message: string }>(`/workflows/${id}/approve`, note ? { note } : undefined);
+export const apiRejectWorkflow = (id: string, note?: string) =>
+  post<{ message: string }>(`/workflows/${id}/reject`, note ? { note } : undefined);
 
 // ─── Projects ──────────────────────────────────────────────────────────────────
 export const apiProjects = () => get<ProjectListResponse>('/projects');
