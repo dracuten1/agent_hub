@@ -56,7 +56,7 @@ type ApproveRequest struct {
 	Note string `json:"note"`
 }
 
-// RejectRequest for rejecting a workflow gate.
+// RejectRequest for rejecting a workflow.
 type RejectRequest struct {
 	Note string `json:"note"`
 }
@@ -153,9 +153,6 @@ func (h *Handler) Approve(c *gin.Context) {
 	})
 }
 
-// ─── GET /api/workflows/:id ─────────────────────────────────────────────────
-
-
 // ─── POST /api/workflows/:id/reject ───────────────────────────────────────
 
 func (h *Handler) Reject(c *gin.Context) {
@@ -163,51 +160,51 @@ func (h *Handler) Reject(c *gin.Context) {
 	var req RejectRequest
 	c.ShouldBindJSON(&req) // note is optional
 
-	// Check existence
+	// Check workflow exists
 	var wf Workflow
 	if err := h.db.Get(&wf, `SELECT id FROM workflows WHERE id=$1`, workflowID); err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		return
 	}
-	_ = wf
 
 	tx, err := h.db.Beginx()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start transaction"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer tx.Rollback()
 
-	// Mark workflow as rejected
-	if _, err := tx.Exec(
-		`UPDATE workflows SET status='rejected', updated_at=NOW() WHERE id=$1`,
-		workflowID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reject workflow"})
+	// Cancel all non-completed phases
+	_, err = tx.Exec(
+		`UPDATE workflow_phases SET status='cancelled', updated_at=NOW()
+		 WHERE workflow_id=$1 AND status != 'completed'`,
+		workflowID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Cancel all non-complete phases
-	if _, err := tx.Exec(
-		`UPDATE workflow_phases
-		 SET status='cancelled', updated_at=NOW()
-		 WHERE workflow_id=$1 AND status != 'completed'`,
-		workflowID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cancel phases"})
+	// Mark workflow as rejected
+	_, err = tx.Exec(
+		`UPDATE workflows SET status='rejected', updated_at=NOW() WHERE id=$1`,
+		workflowID,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to commit"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	_ = req
+	_ = req.Note
 	c.JSON(http.StatusOK, gin.H{"message": "workflow rejected"})
 }
+
+// ─── GET /api/workflows/:id ─────────────────────────────────────────────────
 
 func (h *Handler) GetWorkflow(c *gin.Context) {
 	id := c.Param("id")
