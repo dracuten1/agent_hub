@@ -33,7 +33,7 @@ type Agent struct {
 
 type RegisterRequest struct {
 	Name     string   `json:"name" binding:"required"`
-	Role     string   `json:"role" binding:"required,oneof=developer reviewer tester"`
+	Role     string   `json:"role" binding:"required,oneof=developer reviewer tester pm tl"`
 	Skills   []string `json:"skills"`
 	MaxTasks int      `json:"max_tasks"`
 	Model    string   `json:"model"`
@@ -164,6 +164,10 @@ func (h *Handler) GetQueue(c *gin.Context) {
 			taskTypeFilter = "'review', 'general'"
 		case "test":
 			taskTypeFilter = "'test', 'general'"
+		case "pm":
+			taskTypeFilter = "'gate_decision', 'pm_review', 'pm_spec_review', 'general'"
+		case "tl":
+			taskTypeFilter = "'plan', 'design', 'general'"
 		default:
 			taskTypeFilter = "'general'"
 		}
@@ -178,6 +182,10 @@ func (h *Handler) GetQueue(c *gin.Context) {
 			taskTypeFilter = "'review', 'general'"
 		case "tester":
 			taskTypeFilter = "'test', 'general'"
+		case "pm":
+			taskTypeFilter = "'gate_decision', 'pm_review', 'pm_spec_review', 'general'"
+		case "tl":
+			taskTypeFilter = "'plan', 'design', 'general'"
 		default:
 			taskTypeFilter = "'general'"
 		}

@@ -872,8 +872,8 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 				}
 			}
 		}
-		log.Printf("[workflow] StartWorkflow phase %d: name=%s, gate_type=%s, auto=%v, require_owner=%v",
-			i, pc.Name, pc.GateType, pc.Auto, pc.RequireOwner)
+		log.Printf("[workflow] StartWorkflow phase %d: name=%s, type=|%s|, gate_type=%s, auto=%v, require_owner=%v",
+			i, pc.Name, pc.Type, pc.GateType, pc.Auto, pc.RequireOwner)
 
 		// Build nested config JSON (phase_type, auto, require_owner, etc.)
 		configMap := map[string]interface{}{}
