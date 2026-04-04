@@ -77,11 +77,25 @@ type WorkflowPhase struct {
 
 // Workflow represents a workflow instance
 type Workflow struct {
-	ID          string `db:"id"`
-	ProjectID   string `db:"project_id"`
-	Name        string `db:"name"`
-	TotalPhases int    `db:"total_phases"`
-	Status      string `db:"status"`
+	ID           string `db:"id" json:"id"`
+	ProjectID    string `db:"project_id" json:"project_id"`
+	Name         string `db:"name" json:"name"`
+	TotalPhases  int    `db:"total_phases" json:"total_phases"`
+	Status       string `db:"status" json:"status"`
+	CurrentPhase int    `db:"current_phase" json:"current_phase"`
+	Description  string `db:"description" json:"description"`
+	CreatedAt    string `db:"created_at" json:"created_at"`
+	UpdatedAt    string `db:"updated_at" json:"updated_at"`
+}
+
+// Template represents a workflow template
+type Template struct {
+	ID          string       `db:"id" json:"id"`
+	Name        string       `db:"name" json:"name"`
+	Description  string       `db:"description" json:"description"`
+	Phases      []PhaseConfig `db:"-" json:"phases,omitempty"`
+	CreatedAt   string       `db:"created_at" json:"created_at"`
+	UpdatedAt   string       `db:"updated_at" json:"updated_at"`
 }
 
 // PhaseConfig represents configuration for a workflow phase
@@ -266,15 +280,21 @@ func (e *Engine) evaluateDecisionPhase(ctx context.Context, wfID string, phase *
 	prevPhaseIndex := phase.PhaseIndex - 1
 
 	var prevTotal, prevCompleted, prevFailed int
-	e.db.GetContext(ctx, &prevTotal,
+	if err := e.db.GetContext(ctx, &prevTotal,
 		`SELECT COALESCE(total_tasks,0) FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
-		wfID, prevPhaseIndex)
-	e.db.GetContext(ctx, &prevCompleted,
+		wfID, prevPhaseIndex); err != nil {
+		log.Printf("[workflow] evaluateDecision: get prevTotal: %v", err)
+	}
+	if err := e.db.GetContext(ctx, &prevCompleted,
 		`SELECT COALESCE(completed_tasks,0) FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
-		wfID, prevPhaseIndex)
-	e.db.GetContext(ctx, &prevFailed,
+		wfID, prevPhaseIndex); err != nil {
+		log.Printf("[workflow] evaluateDecision: get prevCompleted: %v", err)
+	}
+	if err := e.db.GetContext(ctx, &prevFailed,
 		`SELECT COALESCE(failed_tasks,0) FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
-		wfID, prevPhaseIndex)
+		wfID, prevPhaseIndex); err != nil {
+		log.Printf("[workflow] evaluateDecision: get prevFailed: %v", err)
+	}
 
 	switch passCondition {
 	case "all":
@@ -366,7 +386,7 @@ func (e *Engine) advanceWorkflow(workflowID string) error {
 			 FROM workflow_phases
 			 WHERE workflow_id = $1 AND status = $2
 			 ORDER BY phase_index ASC LIMIT 1`,
-			workflowID, PhasePending)
+			workflowID, PhaseActive)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				log.Printf("[workflow] workflow %s complete - no more phases", workflowID)
@@ -642,6 +662,38 @@ func AdvanceWorkflow(db *sqlx.DB, workflowID string) error {
 	return e.advanceWorkflow(workflowID)
 }
 
+// CheckAndAdvancePhase checks if all tasks in the current phase are done,
+// marks the phase completed, and advances to the next phase via advanceWorkflow.
+func (e *Engine) CheckAndAdvancePhase(taskID string) error {
+	ctx := context.Background()
+
+	var phaseID, wfID string
+	err := e.db.GetContext(ctx, &phaseID,
+		`SELECT phase_id FROM workflow_task_map WHERE task_id = $1`, taskID)
+	if err != nil {
+		return nil
+	}
+	err = e.db.GetContext(ctx, &wfID,
+		`SELECT workflow_id FROM workflow_phases WHERE id = $1`, phaseID)
+	if err != nil {
+		return nil
+	}
+
+	var totalTasks, completedTasks int
+	e.db.GetContext(ctx, &totalTasks,
+		`SELECT COALESCE(total_tasks,0) FROM workflow_phases WHERE id=$1`, phaseID)
+	e.db.GetContext(ctx, &completedTasks,
+		`SELECT COALESCE(completed_tasks,0) FROM workflow_phases WHERE id=$1`, phaseID)
+
+	if completedTasks >= totalTasks && totalTasks > 0 {
+		e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseCompleted, phaseID)
+		return e.advanceWorkflow(wfID)
+	}
+	return nil
+}
+
 // ApproveGate advances a gate phase that is waiting for approval.
 func (e *Engine) ApproveGate(workflowID, note string) error {
 	ctx := context.Background()
@@ -691,4 +743,38 @@ func (e *Engine) GetGatePhase(workflowID string) (*Phase, error) {
 // IsGatePhase returns true if the phase type is a gate
 func IsGatePhase(phaseType string) bool {
 	return phaseType == PhaseTypeGate
+}
+
+// CreateTemplate inserts a new workflow template.
+func CreateTemplate(db *sqlx.DB, name, description string, phases []PhaseConfig) (*Template, error) {
+	phasesJSON, err := json.Marshal(phases)
+	if err != nil {
+		return nil, err
+	}
+	id := uuid.New().String()
+	now := time.Now().Format(time.RFC3339)
+	_, err = db.Exec(
+		`INSERT INTO workflow_templates (id, name, description, phases, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+		id, name, description, phasesJSON, now, now)
+	if err != nil {
+		return nil, err
+	}
+	return &Template{
+		ID: id, Name: name, Description: description,
+		Phases: phases, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+// ListTemplates returns all workflow templates.
+func ListTemplates(db *sqlx.DB) ([]Template, error) {
+	var templates []Template
+	err := db.Select(&templates,
+		`SELECT id, name, description, created_at, updated_at FROM workflow_templates ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	if templates == nil {
+		templates = []Template{}
+	}
+	return templates, nil
 }
