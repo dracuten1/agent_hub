@@ -51,7 +51,8 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	var feature Feature
-	h.db.Get(&feature, "SELECT * FROM features WHERE id = $1", id)
+	h.db.Get(&feature, `SELECT id, project_id, name, description, user_id, status, created_at, updated_at
+		FROM features WHERE id = $1`, id)
 
 	c.JSON(201, gin.H{"feature": feature})
 }
@@ -60,7 +61,8 @@ func (h *Handler) Get(c *gin.Context) {
 	id := c.Param("id")
 
 	var feature Feature
-	err := h.db.Get(&feature, "SELECT * FROM features WHERE id = $1", id)
+	err := h.db.Get(&feature, `SELECT id, project_id, name, description, user_id, status, created_at, updated_at
+		FROM features WHERE id = $1`, id)
 	if err == sql.ErrNoRows {
 		c.JSON(404, gin.H{"error": "Feature not found"})
 		return
@@ -79,9 +81,11 @@ func (h *Handler) List(c *gin.Context) {
 	var features []Feature
 	var err error
 	if projectID != "" {
-		err = h.db.Select(&features, "SELECT * FROM features WHERE project_id = $1 ORDER BY created_at", projectID)
+		err = h.db.Select(&features, `SELECT id, project_id, name, description, user_id, status, created_at, updated_at
+		FROM features WHERE project_id = $1 ORDER BY created_at`, projectID)
 	} else {
-		err = h.db.Select(&features, "SELECT * FROM features ORDER BY created_at DESC")
+		err = h.db.Select(&features, `SELECT id, project_id, name, description, user_id, status, created_at, updated_at
+		FROM features ORDER BY created_at DESC`)
 	}
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to list features"})
