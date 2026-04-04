@@ -237,7 +237,7 @@ func (h *Handler) ListWorkflows(c *gin.Context) {
 	}
 
 	// Build filtered query
-	query := `SELECT id, name, status, current_phase, total_phases, created_at, updated_at
+	query := `SELECT id, name, status, current_phase, total_phases, project_id, description, variables
 	          FROM workflows WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
