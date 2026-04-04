@@ -20,7 +20,7 @@ export function ProjectDetail() {
   if (loading) return <div className={styles.center}>Loading…</div>;
   if (!data) return null;
 
-  const { project, features, stats } = data;
+  const { project, features = [], stats = { total_tasks: 0, completed: 0, completion_rate: 0 } } = data;
   const pct = stats.completion_rate ?? 0;
 
   return (

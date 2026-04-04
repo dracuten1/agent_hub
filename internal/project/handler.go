@@ -82,7 +82,47 @@ func (h *Handler) Get(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, gin.H{"project": project})
+	// Features with task counts
+	type FeatureWithStats struct {
+		ID             string `json:"id" db:"id"`
+		Name           string `json:"name" db:"name"`
+		Status         string `json:"status" db:"status"`
+		TaskCount      int    `json:"task_count" db:"task_count"`
+		CompletedTasks int    `json:"completed_tasks" db:"completed_tasks"`
+	}
+	var features []FeatureWithStats
+	h.db.Select(&features, `
+		SELECT f.id, f.name, f.status,
+			COUNT(t.id) AS task_count,
+			COUNT(t.id) FILTER (WHERE t.status = 'done') AS completed_tasks
+		FROM features f
+		LEFT JOIN tasks t ON t.feature_id = f.id
+		WHERE f.project_id = $1
+		GROUP BY f.id, f.name, f.status
+		ORDER BY f.created_at`, id)
+	if features == nil {
+		features = []FeatureWithStats{}
+	}
+
+	// Stats
+	type Stats struct {
+		TotalTasks     int     `json:"total_tasks" db:"total_tasks"`
+		Completed      int     `json:"completed" db:"completed"`
+		CompletionRate float64 `json:"completion_rate" db:"completion_rate"`
+	}
+	var stats Stats
+	h.db.Get(&stats, `
+		SELECT
+			COUNT(*) AS total_tasks,
+			COUNT(*) FILTER (WHERE status = 'done') AS completed,
+			CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE status = 'done')::numeric / COUNT(*)::numeric * 100, 1) ELSE 0 END AS completion_rate
+		FROM tasks WHERE project_id = $1`, id)
+
+	c.JSON(200, gin.H{
+		"project":  project,
+		"features": features,
+		"stats":    stats,
+	})
 }
 
 func (h *Handler) Update(c *gin.Context) {
