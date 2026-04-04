@@ -368,10 +368,11 @@ func (e *Engine) advanceWorkflow(workflowID string) error {
 		return err
 	}
 
-	// A phase is complete when all tasks are done, or when it has zero tasks.
-	// (Empty phases auto-complete so the workflow can advance.)
-	isDone := phase.CompletedTasks == phase.TotalTasks
-	isEmpty := phase.TotalTasks == 0 && phase.FailedTasks == 0
+	// A phase is complete when all tasks are done.
+	// Empty non-gate phases auto-complete so the workflow can advance.
+	// Gate phases with 0 tasks still wait for approval.
+	isDone := phase.CompletedTasks == phase.TotalTasks && phase.TotalTasks > 0
+	isEmpty := phase.TotalTasks == 0 && phase.FailedTasks == 0 && phase.PhaseType != PhaseTypeGate && phase.PhaseType != PhaseTypeDecision
 
 	if isDone || isEmpty {
 		_, _ = e.db.Exec(
@@ -386,7 +387,7 @@ func (e *Engine) advanceWorkflow(workflowID string) error {
 			 FROM workflow_phases
 			 WHERE workflow_id = $1 AND status = $2
 			 ORDER BY phase_index ASC LIMIT 1`,
-			workflowID, PhaseActive)
+			workflowID, PhasePending)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				log.Printf("[workflow] workflow %s complete - no more phases", workflowID)
