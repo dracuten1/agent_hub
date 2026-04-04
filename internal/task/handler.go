@@ -551,7 +551,7 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 	agentName, _ := c.Get("agentName")
 	agentNameStr := agentName.(string)
 
-	// Check task is available and transition is valid
+	// Check task exists
 	var oldStatus string
 	var err error
 	err = h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
@@ -560,16 +560,21 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 		return
 	}
 	if !isValidTransition(oldStatus, "claimed") {
-		c.JSON(400, gin.H{"error": fmt.Sprintf("invalid transition from %s to claimed", oldStatus)})
+		c.JSON(409, gin.H{"error": fmt.Sprintf("invalid transition from %s to claimed", oldStatus)})
 		return
 	}
 
-	// Claim
-	_, err = h.db.Exec(
-		"UPDATE tasks SET assignee = $1, status = 'claimed', claimed_at = NOW(), updated_at = NOW() WHERE id = $2",
-		agentNameStr, taskID)
+	// Atomic claim: use WHERE status check to prevent race condition
+	result, err := h.db.Exec(
+		"UPDATE tasks SET assignee = $1, status = 'claimed', claimed_at = NOW(), updated_at = NOW() WHERE id = $2 AND status = $3",
+		agentNameStr, taskID, oldStatus)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to claim task"})
+		return
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		c.JSON(409, gin.H{"error": "Task already claimed by another agent"})
 		return
 	}
 

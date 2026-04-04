@@ -82,8 +82,10 @@ func (b *Bridge) pollAndProcess(ctx context.Context) error {
 	// 3. Progress
 	b.updateProgress(task.ID, 10, "delegating to agent")
 
-	// 4. Delegate
-	result := b.agent.Run(ctx, task)
+	// 4. Delegate (with per-task timeout)
+	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(b.cfg.TaskTimeout)*time.Second)
+	defer cancel()
+	result := b.agent.Run(taskCtx, task)
 
 	// 5. Verify build (using config's project dir and build cmd)
 	buildOK := true
@@ -143,6 +145,11 @@ func (b *Bridge) claimTask(taskID string) error {
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
+	if resp.StatusCode == 409 {
+		// Task already claimed by another agent — skip silently
+		log.Printf("[Bridge] Task %s already claimed — skipping", taskID)
+		return nil
+	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("claim returned %d", resp.StatusCode)
 	}

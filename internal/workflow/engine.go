@@ -100,8 +100,15 @@ type Template struct {
 
 // PhaseConfig represents configuration for a workflow phase
 type PhaseConfig struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
+	Type         string          `json:"type"`
+	Name         string          `json:"name"`
+	TaskType     string          `json:"task_type"`
+	Count        int             `json:"count"`
+	PassCondition string         `json:"pass_condition"`
+	MaxRetries   int             `json:"max_retries"`
+	Auto         bool            `json:"auto"`
+	RequireOwner bool            `json:"require_owner"`
+	Approver     string          `json:"approver"`
 }
 
 // Engine manages workflow operations
@@ -602,7 +609,7 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 	if templateID != "" {
 		var cfgBytes []byte
 		err := tx.Get(&cfgBytes,
-			`SELECT phase_configs FROM workflow_templates WHERE id=$1`, templateID)
+			`SELECT phases FROM workflow_templates WHERE id=$1`, templateID)
 		if err == nil && len(cfgBytes) > 0 {
 			json.Unmarshal(cfgBytes, &phaseConfigs)
 		}
@@ -613,9 +620,9 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 	}
 
 	_, err = tx.Exec(
-		`INSERT INTO workflows (id, name, project_id, total_phases, status)
-		 VALUES ($1, $2, $3, $4, 'active')`,
-		wfID, name, projectID, len(phaseConfigs))
+		`INSERT INTO workflows (id, template_id, name, project_id, total_phases, status, description)
+		 VALUES ($1, $2, $3, $4, $5, 'active', $6)`,
+		wfID, templateID, name, projectID, len(phaseConfigs), description)
 	if err != nil {
 		return nil, fmt.Errorf("insert workflow: %w", err)
 	}
@@ -631,9 +638,9 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 			status = PhaseActive // Bug 1 fix: was PhaseRunning, should be PhaseActive
 		}
 		_, err = tx.Exec(
-			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, status)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
-			phaseID, wfID, pc.Name, i, pc.Type, status)
+			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, task_type, status, config)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			phaseID, wfID, pc.Name, i, pc.Type, pc.TaskType, status, []byte("{}"))
 		if err != nil {
 			return nil, fmt.Errorf("insert phase: %w", err)
 		}
