@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -169,15 +170,15 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 
 	// Per-phase task summary: load tasks for ALL phases
 	type TaskSummary struct {
-		ID           string `json:"id"       db:"id"`
-		Title        string `json:"title"    db:"title"`
-		Status       string `json:"status"   db:"status"`
-		TaskType     string `json:"task_type" db:"task_type"`
-		Assignee     string `json:"assignee" db:"assignee"`
-		Priority     string `json:"priority" db:"priority"`
-		Progress     int    `json:"progress" db:"progress"`
-		CreatedAt    string `json:"created_at" db:"created_at"`
-		CompletedAt  *string `json:"completed_at,omitempty" db:"completed_at"`
+		ID           string  `json:"id"             db:"id"`
+		Title        string  `json:"title"          db:"title"`
+		Status       string  `json:"status"         db:"status"`
+		TaskType     string  `json:"task_type"      db:"task_type"`
+		Assignee     *string `json:"assignee"       db:"assignee"`
+		Priority     string  `json:"priority"       db:"priority"`
+		Progress     int     `json:"progress"       db:"progress"`
+		CreatedAt    string  `json:"created_at"     db:"created_at"`
+		CompletedAt  *string `json:"completed_at"   db:"completed_at"`
 	}
 
 	type PhaseWithTasks struct {
@@ -188,14 +189,19 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 	enriched := make([]PhaseWithTasks, 0, len(phases))
 	for _, p := range phases {
 		pt := PhaseWithTasks{WorkflowPhase: p}
-		h.db.Select(&pt.Tasks,
+		if err := h.db.Select(&pt.Tasks,
 			`SELECT t.id, t.title, t.status, t.task_type, t.assignee, t.priority, t.progress,
-			        t.created_at::text AS created_at, t.completed_at::text AS completed_at
+			        t.created_at::text, t.completed_at::text
 			 FROM tasks t
 			 JOIN workflow_task_map m ON m.task_id = t.id
-			 WHERE m.phase_id=$1
+			 WHERE m.phase_id = $1
 			 ORDER BY t.created_at`,
-			p.ID)
+			p.ID); err != nil {
+			log.Printf("[Workflow] load tasks for phase %s error: %v", p.ID, err)
+		}
+		if pt.Tasks == nil {
+			pt.Tasks = []TaskSummary{}
+		}
 		enriched = append(enriched, pt)
 	}
 
