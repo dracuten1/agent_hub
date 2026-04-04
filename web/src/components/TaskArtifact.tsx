@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify';
+import DOMPurify from 'dompurify';
 import type { Task } from '../types';
 import styles from './TaskArtifact.module.css';
 
@@ -71,7 +73,7 @@ export function TaskArtifact({ task }: Props) {
       ) : isMarkdown(result) ? (
         <div
           className={styles.md}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(result) }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(result)) }}
         />
       ) : (
         <pre className={styles.pre}><code>{renderText(result)}</code></pre>

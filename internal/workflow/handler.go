@@ -177,6 +177,7 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 		Assignee     *string `json:"assignee"       db:"assignee"`
 		Priority     string  `json:"priority"       db:"priority"`
 		Progress     int     `json:"progress"       db:"progress"`
+		Result       *string `json:"result"          db:"result"`
 		CreatedAt    string  `json:"created_at"     db:"created_at"`
 		CompletedAt  *string `json:"completed_at"   db:"completed_at"`
 	}
@@ -190,7 +191,7 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 	for _, p := range phases {
 		pt := PhaseWithTasks{WorkflowPhase: p}
 		if err := h.db.Select(&pt.Tasks,
-			`SELECT t.id, t.title, t.status, t.task_type, t.assignee, t.priority, t.progress,
+			`SELECT t.id, t.title, t.status, t.task_type, t.assignee, t.priority, t.progress, t.result,
 			        t.created_at::text, t.completed_at::text
 			 FROM tasks t
 			 JOIN workflow_task_map m ON m.task_id = t.id
