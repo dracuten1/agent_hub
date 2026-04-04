@@ -28,7 +28,7 @@ services:
       DATABASE_URL: postgres://agenthub:Ag3nThub2026S3cur3@db-dev:5432/agenthub?sslmode=disable
       JWT_SECRET: dev-secret-not-for-production
       PORT: "8081"
-      AGENTHUB_ADMIN_PASS: admin123
+      AGENTHUB_ADMIN_PASS: ${AGENTHUB_ADMIN_PASS:-admin123}
     depends_on:
       db-dev:
         condition: service_healthy

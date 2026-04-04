@@ -11,3 +11,18 @@ worker
 *.worker
 server
 internal/time/\ninternal/uptime/\nworkerbridge\n*.rej\nserver
+
+# Worker bridge binaries
+workerbridge
+workerbridge-pm
+
+# Secret-containing scripts
+scripts/pipeline-health.sh
+
+# Go binaries
+agenthub
+agenthub-api-bin
+agenthub-old
+agenthub-static
+server_docker
+server
