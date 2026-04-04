@@ -152,7 +152,7 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 	id := c.Param("id")
 
 	var wf Workflow
-	if err := h.db.Get(&wf, `SELECT * FROM workflows WHERE id=$1`, id); err != nil {
+	if err := h.db.Get(&wf, `SELECT id, project_id, name, status, current_phase, total_phases, description, variables FROM workflows WHERE id=$1`, id); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		} else {
@@ -164,7 +164,7 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 	// Load all phases
 	var phases []WorkflowPhase
 	h.db.Select(&phases,
-		`SELECT * FROM workflow_phases WHERE workflow_id=$1 ORDER BY phase_index`,
+		`SELECT id, workflow_id, phase_name, phase_index, phase_type, task_type, status, config, total_tasks, completed_tasks FROM workflow_phases WHERE workflow_id=$1 ORDER BY phase_index`,
 		id)
 
 	// Per-phase task summary: only for current and past phases
