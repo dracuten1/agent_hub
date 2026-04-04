@@ -943,6 +943,10 @@ func (e *Engine) CheckAndAdvancePhase(taskID string) error {
 		return nil
 	}
 
+	// Increment completed_tasks for this phase
+	e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET completed_tasks = completed_tasks + 1 WHERE id = $1`, phaseID)
+
 	var totalTasks, completedTasks int
 	e.db.GetContext(ctx, &totalTasks,
 		`SELECT COALESCE(total_tasks,0) FROM workflow_phases WHERE id=$1`, phaseID)
