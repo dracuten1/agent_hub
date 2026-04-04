@@ -928,7 +928,7 @@ func (e *Engine) CheckGateDecision(taskID string, verdict string, reason string,
 			"pass", taskID)
 	} else {
 		e.db.ExecContext(ctx,
-			`UPDATE tasks SET review_verdict=$1, review_issues=$2, updated_at=NOW() WHERE id=$3`,
+			`UPDATE tasks SET review_verdict=$1, review_issues=ARRAY[$2], updated_at=NOW() WHERE id=$3`,
 			"fail", reason, taskID)
 	}
 
