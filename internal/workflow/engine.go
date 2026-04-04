@@ -302,18 +302,72 @@ func (e *Engine) enterGatePhase(ctx context.Context, wfID string, phase *Workflo
 	}
 
 	// Agent gate: create a gate_decision task and activate the phase
-	// Build decision task description
+	// ── Build rich context for the PM/agent deciding the gate ──────────────────
+	prevPhaseIndex := phase.PhaseIndex - 1
+
 	var wfDesc string
 	e.db.GetContext(ctx, &wfDesc,
 		`SELECT COALESCE(description,'') FROM workflows WHERE id=$1`, wfID)
-	prevPhaseIndex := phase.PhaseIndex - 1
-	var prevSummary string
-	e.db.GetContext(ctx, &prevSummary,
-		`SELECT COALESCE(description,'') FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
+
+	var prevPhaseName string
+	var prevTotal, prevCompleted int
+	e.db.GetContext(ctx, &prevPhaseName,
+		`SELECT COALESCE(phase_name,'') FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`, wfID, prevPhaseIndex)
+	e.db.GetContext(ctx, &prevTotal,
+		`SELECT COALESCE(total_tasks,0) FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`, wfID, prevPhaseIndex)
+	e.db.GetContext(ctx, &prevCompleted,
+		`SELECT COALESCE(completed_tasks,0) FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`, wfID, prevPhaseIndex)
+
+	var prevTasks []struct {
+		Title   string `db:"title"`
+		Verdict string `db:"verdict"`
+	}
+	e.db.SelectContext(ctx, &prevTasks,
+		`SELECT t.title, COALESCE(t.review_verdict,t.status) as verdict
+		 FROM tasks t
+		 JOIN workflow_task_map m ON m.task_id = t.id
+		 JOIN workflow_phases p ON p.id = m.phase_id
+		 WHERE p.workflow_id = $1 AND p.phase_index = $2 AND t.status IN ('done','deployed')`,
 		wfID, prevPhaseIndex)
 
-	desc := fmt.Sprintf("## Gate Decision: %s\n\n## Workflow Context\n%s\n\n## Previous Phase Summary\n%s\n\n## Decision\nReview the above context and decide whether to PASS (approve) or REJECT (reject) the workflow to continue.\n- Pass: All criteria are met, proceed to next phase\n- Reject: Issues found, return to previous phase for fixes",
-		phase.PhaseName, wfDesc, prevSummary)
+	var prevTasksSummary string
+	if len(prevTasks) > 0 {
+		lines := make([]string, len(prevTasks))
+		for i, t := range prevTasks {
+			lines[i] = fmt.Sprintf("- %s [%s]", t.Title, t.Verdict)
+		}
+		prevTasksSummary = strings.Join(lines, "\n")
+	} else {
+		prevTasksSummary = "(no completed tasks in previous phase)"
+	}
+
+	desc := fmt.Sprintf(
+		`## Gate Decision: %s
+
+## Workflow Spec / Plan
+%s
+
+## Previous Phase: %s (index %d) -- Progress: %d/%d tasks
+### Completed Tasks
+%s
+
+## Decision Needed
+Review the above and decide:
+- PASS: All criteria met, proceed to next phase
+- FAIL: Issues found. Provide a reason, and optionally target_phase_index to requeue a specific phase
+
+## API Usage
+To PASS:  POST /api/tasks/{id}/complete
+  Body: {"status":"gate_decision","verdict":"pass","reason":"why approved"}
+
+To FAIL (requeue previous phase):  POST /api/tasks/{id}/complete
+  Body: {"status":"gate_decision","verdict":"fail","reason":"why rejected"}
+
+To FAIL (requeue specific phase):  POST /api/tasks/{id}/complete
+  Body: {"status":"gate_decision","verdict":"fail","reason":"why rejected","target_phase_index":%d}`,
+		phase.PhaseName, wfDesc, prevPhaseName, prevPhaseIndex,
+		prevCompleted, prevTotal, prevTasksSummary, prevPhaseIndex)
+
 
 	var projectID string
 	e.db.GetContext(ctx, &projectID,
@@ -845,7 +899,7 @@ func (e *Engine) CheckAndAdvancePhase(taskID string) error {
 // CheckGateDecision handles pass/fail verdicts from gate_decision tasks.
 // - pass: mark phase completed, advance workflow
 // - fail: mark previous phase as failed, requeue its tasks, advance
-func (e *Engine) CheckGateDecision(taskID string, verdict string) error {
+func (e *Engine) CheckGateDecision(taskID string, verdict string, reason string, targetPhaseIndex *int) error {
 	ctx := context.Background()
 
 	// Look up the gate decision task's workflow/phase
@@ -866,6 +920,17 @@ func (e *Engine) CheckGateDecision(taskID string, verdict string) error {
 		return fmt.Errorf("CheckGateDecision: lookup gate task: %w", err)
 	}
 
+	// Store verdict in task record
+	if verdict == "pass" {
+		e.db.ExecContext(ctx,
+			`UPDATE tasks SET review_verdict=$1, updated_at=NOW() WHERE id=$2`,
+			"pass", taskID)
+	} else {
+		e.db.ExecContext(ctx,
+			`UPDATE tasks SET review_verdict=$1, review_issues=$2, updated_at=NOW() WHERE id=$3`,
+			"fail", reason, taskID)
+	}
+
 	if verdict == "pass" {
 		// Mark phase completed, advance workflow
 		e.db.ExecContext(ctx,
@@ -876,34 +941,43 @@ func (e *Engine) CheckGateDecision(taskID string, verdict string) error {
 		return e.advanceWorkflow(info.WorkflowID)
 	}
 
-	// verdict == "fail": mark previous phase tasks as failed, requeue
-	prevPhaseIndex := info.PhaseIndex - 1
-	if prevPhaseIndex < 0 {
-		log.Printf("[workflow] gate decision FAIL: no previous phase for workflow %s", info.WorkflowID)
+	// verdict == "fail": determine target phase, reset it, requeue tasks
+	requeuePhaseIndex := info.PhaseIndex - 1
+	if targetPhaseIndex != nil {
+		requeuePhaseIndex = *targetPhaseIndex
+	}
+	if requeuePhaseIndex < 0 {
+		log.Printf("[workflow] gate decision FAIL: no phase to requeue for workflow %s",
+			info.WorkflowID)
 		return nil
 	}
 
-	// Mark previous phase as failed
-	e.db.ExecContext(ctx,
-		`UPDATE workflow_phases SET status=$1,updated_at=NOW()
-		 WHERE workflow_id=$2 AND phase_index=$3`,
-		PhaseCompleted, info.WorkflowID, prevPhaseIndex)
+	var requeuePhaseID string
+	err = e.db.GetContext(ctx, &requeuePhaseID,
+		`SELECT id FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
+		info.WorkflowID, requeuePhaseIndex)
+	if err != nil {
+		log.Printf("[workflow] gate decision FAIL: phase index %d not found for workflow %s",
+			requeuePhaseIndex, info.WorkflowID)
+		return nil
+	}
 
-	// Requeue previous phase tasks (failed → available, clear assignee)
+	e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET status=$1, updated_at=NOW() WHERE id=$2`,
+		PhaseActive, requeuePhaseID)
+
 	e.db.ExecContext(ctx,
 		`UPDATE tasks t
 		 SET    status='available', assignee=NULL, retry_count=retry_count+1,
 		        updated_at=NOW()
 		 FROM   workflow_task_map m
-		 WHERE  m.task_id=t.id AND m.workflow_id=$1 AND m.phase_id=(
-		        SELECT id FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2
-		        ) AND t.status IN ('done','review','test')`,
-		info.WorkflowID, prevPhaseIndex)
+		 WHERE  m.task_id=t.id AND m.phase_id=$1
+		   AND  t.status IN ('done','review','test','failed','in_progress')`,
+		requeuePhaseID)
 
-	log.Printf("[workflow] gate decision FAIL: requeued previous phase (index %d) tasks for workflow %s",
-		prevPhaseIndex, info.WorkflowID)
+	log.Printf("[workflow] gate decision FAIL: requeued phase index %d (id=%s) tasks -- reason: %.80s",
+		requeuePhaseIndex, requeuePhaseID, reason)
 
-	// Advance workflow to previous phase
 	return e.advanceWorkflow(info.WorkflowID)
 }
 

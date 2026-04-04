@@ -50,7 +50,7 @@ type Handler struct {
 	WorkflowAdvancer interface {
 		CheckAndAdvancePhase(taskID string) error
 		CreateWorkflowTestTask(taskID string) error
-		CheckGateDecision(taskID string, verdict string) error
+		CheckGateDecision(taskID string, verdict string, reason string, targetPhaseIndex *int) error
 	}
 }
 
@@ -121,6 +121,8 @@ type CompleteRequest struct {
 	Branch string   `json:"branch"`
 	Notes  string   `json:"notes"`
 	Verdict string  `json:"verdict" binding:"omitempty,oneof=pass fail"` // used for gate_decision tasks
+	Reason           string  `json:"reason"`                                              // reason for pass/fail
+	TargetPhaseIndex *int   `json:"target_phase_index"`                            // for fail: requeue specific phase index
 }
 
 type ReviewRequest struct {
@@ -702,7 +704,7 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 
 	// For gate_decision tasks: process pass/fail verdict
 	if req.Status == "gate_decision" && req.Verdict != "" && h.WorkflowAdvancer != nil {
-		if err := h.WorkflowAdvancer.CheckGateDecision(taskID, req.Verdict); err != nil {
+		if err := h.WorkflowAdvancer.CheckGateDecision(taskID, req.Verdict, req.Reason, req.TargetPhaseIndex); err != nil {
 			log.Printf("[task] CheckGateDecision error for %s: %v", taskID, err)
 		}
 	}
