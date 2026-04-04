@@ -21,13 +21,14 @@ var validTransitions = map[string][]string{
 	"assigned":        {"claimed"},
 	"orphaned":        {"claimed"},
 	"claimed":         {"in_progress", "done", "review", "available"},
-	"in_progress":     {"done", "review", "needs_fix", "failed"},
-	"done":            {"review", "test", "needs_fix", "escalated"},
-	"review":          {"done", "test", "needs_fix"},
+	"in_progress":     {"done", "review", "needs_fix", "failed", "gate_decision"},
+	"done":            {"review", "test", "needs_fix", "escalated", "gate_decision"},
+	"review":          {"done", "test", "needs_fix", "gate_decision"},
 	"needs_fix":       {"in_progress", "claimed", "failed"},
 	"fix_in_progress": {"done", "needs_fix"},
-	"test":            {"deployed", "needs_fix"},
+	"test":            {"deployed", "needs_fix", "gate_decision"},
 	"failed":          {"escalated"},
+	"gate_decision":   {"done", "needs_fix"},
 }
 
 func isValidTransition(from, to string) bool {
@@ -49,6 +50,7 @@ type Handler struct {
 	WorkflowAdvancer interface {
 		CheckAndAdvancePhase(taskID string) error
 		CreateWorkflowTestTask(taskID string) error
+		CheckGateDecision(taskID string, verdict string) error
 	}
 }
 
@@ -114,10 +116,11 @@ type ClaimRequest struct {
 }
 
 type CompleteRequest struct {
-	Status string   `json:"status" binding:"required,oneof=done failed blocked needs_fix"`
+	Status string   `json:"status" binding:"required,oneof=done failed blocked needs_fix gate_decision"`
 	Files  []string `json:"files_changed"`
 	Branch string   `json:"branch"`
 	Notes  string   `json:"notes"`
+	Verdict string  `json:"verdict" binding:"omitempty,oneof=pass fail"` // used for gate_decision tasks
 }
 
 type ReviewRequest struct {
@@ -638,8 +641,9 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 	}
 
 	var oldStatus string
+	var taskType string
 	var err error
-	err = h.db.Get(&oldStatus, "SELECT status FROM tasks WHERE id = $1", taskID)
+	err = h.db.QueryRow("SELECT status, task_type FROM tasks WHERE id = $1", taskID).Scan(&oldStatus, &taskType)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "Task not found"})
 		return
@@ -653,6 +657,11 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 		newStatus = "failed"
 	} else if req.Status == "blocked" {
 		newStatus = "escalated"
+	} else if req.Status == "gate_decision" {
+		// Agent gate decision task completed
+		newStatus = "done"
+	} else {
+		newStatus = req.Status
 	}
 
 	if !isValidTransition(oldStatus, newStatus) {
@@ -691,8 +700,15 @@ func (h *Handler) CompleteTask(c *gin.Context) {
 
 	h.broadcastTaskEvent(taskID, "task_updated", oldStatus, newStatus)
 
+	// For gate_decision tasks: process pass/fail verdict
+	if req.Status == "gate_decision" && req.Verdict != "" && h.WorkflowAdvancer != nil {
+		if err := h.WorkflowAdvancer.CheckGateDecision(taskID, req.Verdict); err != nil {
+			log.Printf("[task] CheckGateDecision error for %s: %v", taskID, err)
+		}
+	}
+
 	// Check if this task completion should advance the workflow phase
-	if newStatus == "done" || newStatus == "deployed" {
+	if (newStatus == "done" || newStatus == "deployed") && req.Status != "gate_decision" {
 		if h.WorkflowAdvancer != nil {
 			if err := h.WorkflowAdvancer.CheckAndAdvancePhase(taskID); err != nil {
 				log.Printf("[task] workflow advance error for %s: %v", taskID, err)

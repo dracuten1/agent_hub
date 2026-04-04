@@ -275,22 +275,67 @@ func (e *Engine) createPerDevPhaseTasks(ctx context.Context, wfID, projectID str
 	return err
 }
 
-// enterGatePhase transitions a gate phase to waiting_approval and sends notification.
+// enterGatePhase transitions a gate phase. It branches on config:
+// - human gate: require_owner=true OR approver="owner" → waiting_approval, pause workflow
+// - agent gate:  otherwise → create a gate_decision task, activate phase
 func (e *Engine) enterGatePhase(ctx context.Context, wfID string, phase *WorkflowPhase) error {
-	_, err := e.db.ExecContext(ctx,
-		`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
-		PhaseWaitingApproval, phase.ID)
+	cfg := parsePhaseConfig(phase.Config)
+	requireOwner := cfg.GetBool("require_owner")
+	approver      := cfg.GetString("approver")
+
+	// Human gate: pause and require explicit approval
+	if requireOwner || approver == "owner" {
+		_, err := e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseWaitingApproval, phase.ID)
+		if err != nil {
+			return fmt.Errorf("enterGatePhase: update phase: %w", err)
+		}
+		_, err = e.db.ExecContext(ctx,
+			`UPDATE workflows SET status=$1,updated_at=NOW() WHERE id=$2`,
+			StatusPaused, wfID)
+		if err != nil {
+			return fmt.Errorf("enterGatePhase: pause workflow: %w", err)
+		}
+		e.sendGateNotification(wfID, phase, approver, requireOwner)
+		return nil
+	}
+
+	// Agent gate: create a gate_decision task and activate the phase
+	// Build decision task description
+	var wfDesc string
+	e.db.GetContext(ctx, &wfDesc,
+		`SELECT COALESCE(description,'') FROM workflows WHERE id=$1`, wfID)
+	prevPhaseIndex := phase.PhaseIndex - 1
+	var prevSummary string
+	e.db.GetContext(ctx, &prevSummary,
+		`SELECT COALESCE(description,'') FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2`,
+		wfID, prevPhaseIndex)
+
+	desc := fmt.Sprintf("## Gate Decision: %s\n\n## Workflow Context\n%s\n\n## Previous Phase Summary\n%s\n\n## Decision\nReview the above context and decide whether to PASS (approve) or REJECT (reject) the workflow to continue.\n- Pass: All criteria are met, proceed to next phase\n- Reject: Issues found, return to previous phase for fixes",
+		phase.PhaseName, wfDesc, prevSummary)
+
+	var projectID string
+	e.db.GetContext(ctx, &projectID,
+		`SELECT project_id FROM workflows WHERE id=$1`, wfID)
+
+	taskID, err := e.createTask(ctx,
+		fmt.Sprintf("Gate Decision: %s", phase.PhaseName),
+		"gate_decision", projectID, "available", desc)
+	if err != nil {
+		return fmt.Errorf("enterGatePhase: create gate decision task: %w", err)
+	}
+	if err := e.addWorkflowMapping(ctx, taskID, wfID, phase.ID); err != nil {
+		return fmt.Errorf("enterGatePhase: add mapping: %w", err)
+	}
+	_, err = e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET status=$1,total_tasks=1,updated_at=NOW() WHERE id=$2`,
+		PhaseRunning, phase.ID)
 	if err != nil {
 		return fmt.Errorf("enterGatePhase: update phase: %w", err)
 	}
-	_, err = e.db.ExecContext(ctx,
-		`UPDATE workflows SET status=$1,updated_at=NOW() WHERE id=$2`,
-		StatusPaused, wfID)
-	if err != nil {
-		return fmt.Errorf("enterGatePhase: pause workflow: %w", err)
-	}
-	cfg := parsePhaseConfig(phase.Config)
-	e.sendGateNotification(wfID, phase, cfg.GetString("approver"), cfg.GetBool("require_owner"))
+
+	log.Printf("[workflow] agent gate: created gate_decision task %s for phase %s (workflow %s)", taskID, phase.PhaseName, wfID)
 	return nil
 }
 
@@ -795,6 +840,71 @@ func (e *Engine) CheckAndAdvancePhase(taskID string) error {
 		return e.advanceWorkflow(wfID)
 	}
 	return nil
+}
+
+// CheckGateDecision handles pass/fail verdicts from gate_decision tasks.
+// - pass: mark phase completed, advance workflow
+// - fail: mark previous phase as failed, requeue its tasks, advance
+func (e *Engine) CheckGateDecision(taskID string, verdict string) error {
+	ctx := context.Background()
+
+	// Look up the gate decision task's workflow/phase
+	var info struct {
+		TaskTitle string `db:"title"`
+		WorkflowID string `db:"workflow_id"`
+		PhaseID    string `db:"phase_id"`
+		PhaseIndex int    `db:"phase_index"`
+	}
+	err := e.db.GetContext(ctx, &info,
+		`SELECT t.title, m.workflow_id, m.phase_id, p.phase_index
+		 FROM tasks t
+		 JOIN workflow_task_map m ON m.task_id = t.id
+		 JOIN workflow_phases p ON p.id = m.phase_id
+		 WHERE t.id = $1`,
+		taskID)
+	if err != nil {
+		return fmt.Errorf("CheckGateDecision: lookup gate task: %w", err)
+	}
+
+	if verdict == "pass" {
+		// Mark phase completed, advance workflow
+		e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseCompleted, info.PhaseID)
+		log.Printf("[workflow] gate decision PASS: phase %s (%s) approved, advancing workflow %s",
+			info.PhaseID, info.TaskTitle, info.WorkflowID)
+		return e.advanceWorkflow(info.WorkflowID)
+	}
+
+	// verdict == "fail": mark previous phase tasks as failed, requeue
+	prevPhaseIndex := info.PhaseIndex - 1
+	if prevPhaseIndex < 0 {
+		log.Printf("[workflow] gate decision FAIL: no previous phase for workflow %s", info.WorkflowID)
+		return nil
+	}
+
+	// Mark previous phase as failed
+	e.db.ExecContext(ctx,
+		`UPDATE workflow_phases SET status=$1,updated_at=NOW()
+		 WHERE workflow_id=$2 AND phase_index=$3`,
+		PhaseCompleted, info.WorkflowID, prevPhaseIndex)
+
+	// Requeue previous phase tasks (failed → available, clear assignee)
+	e.db.ExecContext(ctx,
+		`UPDATE tasks t
+		 SET    status='available', assignee=NULL, retry_count=retry_count+1,
+		        updated_at=NOW()
+		 FROM   workflow_task_map m
+		 WHERE  m.task_id=t.id AND m.workflow_id=$1 AND m.phase_id=(
+		        SELECT id FROM workflow_phases WHERE workflow_id=$1 AND phase_index=$2
+		        ) AND t.status IN ('done','review','test')`,
+		info.WorkflowID, prevPhaseIndex)
+
+	log.Printf("[workflow] gate decision FAIL: requeued previous phase (index %d) tasks for workflow %s",
+		prevPhaseIndex, info.WorkflowID)
+
+	// Advance workflow to previous phase
+	return e.advanceWorkflow(info.WorkflowID)
 }
 
 // autoQueueNextPhaseTasks creates follow-up (e.g. review) tasks for the next phase
