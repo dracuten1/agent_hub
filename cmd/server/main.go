@@ -121,11 +121,8 @@ func main() {
 		public.POST("/auth/register", authHandler.Register)
 		public.POST("/auth/login", authHandler.Login)
 		// Dashboard API (used by React SPA)
-		dashboardHandler := dashboard.NewHandler(database)
-		public.GET("/dashboard/summary", dashboardHandler.Summary)
-		public.GET("/dashboard/agents", dashboardHandler.Agents)
-		public.GET("/dashboard/tasks", dashboardHandler.Tasks)
-		public.GET("/dashboard", dashboardHandler.Summary)
+		dh := dashboard.NewHandler(database)
+		public.GET("/dashboard", dh.Summary)
 		public.POST("/agent/register", agentHandler.RegisterAgent)
 		public.GET("/ws", wsHandler.HandleWS)
 	}
