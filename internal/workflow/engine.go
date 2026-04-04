@@ -62,20 +62,20 @@ type Phase struct {
 
 // WorkflowPhase represents a phase used by the Engine (not a DB row)
 type WorkflowPhase struct {
-	ID             string `db:"id" json:"id"`
-	WorkflowID     string `db:"workflow_id" json:"workflow_id"`
-	PhaseName      string `db:"phase_name" json:"phase_name"`
-	PhaseIndex     int    `db:"phase_index" json:"phase_index"`
-	PhaseType      string `db:"phase_type" json:"phase_type"`
-	TaskType       string `db:"task_type" json:"task_type"`
-	Status         string `db:"status" json:"status"`
+	ID             string          `db:"id" json:"id"`
+	WorkflowID     string          `db:"workflow_id" json:"workflow_id"`
+	PhaseName      string          `db:"phase_name" json:"name"`
+	PhaseIndex     int             `db:"phase_index" json:"index"`
+	PhaseType      string          `db:"phase_type" json:"phase_type"`
+	TaskType       string          `db:"task_type" json:"task_type"`
+	Status         string          `db:"status" json:"status"`
 	Config         json.RawMessage `db:"config" json:"config,omitempty"`
-	TotalTasks     int    `db:"total_tasks" json:"total_tasks"`
-	CompletedTasks int    `db:"completed_tasks" json:"completed_tasks"`
-	FailedTasks    int    `db:"failed_tasks" json:"failed_tasks"`
-	PendingTasks   int    `db:"pending_tasks" json:"pending_tasks"`
-	CreatedAt      time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
+	TotalTasks     int             `db:"total_tasks" json:"total_tasks"`
+	CompletedTasks int             `db:"completed_tasks" json:"completed_tasks"`
+	FailedTasks    int             `db:"failed_tasks" json:"failed_tasks"`
+	PendingTasks   int             `db:"pending_tasks" json:"pending_tasks"`
+	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // Workflow represents a workflow instance

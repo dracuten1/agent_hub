@@ -167,12 +167,17 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 		`SELECT id, workflow_id, phase_name, phase_index, phase_type, task_type, status, config, total_tasks, completed_tasks FROM workflow_phases WHERE workflow_id=$1 ORDER BY phase_index`,
 		id)
 
-	// Per-phase task summary: only for current and past phases
+	// Per-phase task summary: load tasks for ALL phases
 	type TaskSummary struct {
-		ID       string `json:"id"       db:"id"`
-		Title    string `json:"title"    db:"title"`
-		Status   string `json:"status"   db:"status"`
-		Assignee string `json:"assignee" db:"assignee"`
+		ID           string `json:"id"       db:"id"`
+		Title        string `json:"title"    db:"title"`
+		Status       string `json:"status"   db:"status"`
+		TaskType     string `json:"task_type" db:"task_type"`
+		Assignee     string `json:"assignee" db:"assignee"`
+		Priority     string `json:"priority" db:"priority"`
+		Progress     int    `json:"progress" db:"progress"`
+		CreatedAt    string `json:"created_at" db:"created_at"`
+		CompletedAt  *string `json:"completed_at,omitempty" db:"completed_at"`
 	}
 
 	type PhaseWithTasks struct {
@@ -183,24 +188,26 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 	enriched := make([]PhaseWithTasks, 0, len(phases))
 	for _, p := range phases {
 		pt := PhaseWithTasks{WorkflowPhase: p}
-		// Only load tasks for completed or active phases (not future ones)
-		if p.Status == PhaseCompleted || p.Status == PhaseRunning || p.PhaseIndex <= wf.CurrentPhase {
-			h.db.Select(&pt.Tasks,
-				`SELECT t.id, t.title, t.status, t.assignee
-				 FROM tasks t
-				 JOIN workflow_task_map m ON m.task_id = t.id
-				 WHERE m.phase_id=$1`,
-				p.ID)
-		}
+		h.db.Select(&pt.Tasks,
+			`SELECT t.id, t.title, t.status, t.task_type, t.assignee, t.priority, t.progress,
+			        t.created_at::text AS created_at, t.completed_at::text AS completed_at
+			 FROM tasks t
+			 JOIN workflow_task_map m ON m.task_id = t.id
+			 WHERE m.phase_id=$1
+			 ORDER BY t.created_at`,
+			p.ID)
 		enriched = append(enriched, pt)
 	}
 
-	// Progress summary
-	var total, done int
-	h.db.Get(&total, `SELECT COUNT(*) FROM workflow_task_map WHERE workflow_id=$1`, id)
+	// Progress summary: sum total_tasks from phases + sum completed tasks
+	var total int
+	var done int
+	h.db.Get(&total,
+		`SELECT COALESCE(SUM(total_tasks), 0) FROM workflow_phases WHERE workflow_id=$1`, id)
 	h.db.Get(&done,
-		`SELECT COUNT(*) FROM workflow_task_map m JOIN tasks t ON t.id=m.task_id
-		 WHERE m.workflow_id=$1 AND t.status IN ('done','deployed')`, id)
+		`SELECT COUNT(*) FROM workflow_task_map m
+		 JOIN tasks t ON t.id = m.task_id
+		 WHERE m.workflow_id = $1 AND t.status IN ('done','deployed')`, id)
 
 	var pct int
 	if total > 0 {
@@ -211,8 +218,8 @@ func (h *Handler) GetWorkflow(c *gin.Context) {
 		"workflow":  wf,
 		"phases":    enriched,
 		"progress": map[string]int{
-			"total_tasks":      total,
-			"completed_tasks":   done,
+			"total_tasks":       total,
+			"completed_tasks":    done,
 			"percentage":        pct,
 		},
 	})
