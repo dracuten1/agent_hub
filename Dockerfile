@@ -12,6 +12,7 @@ RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /app
 COPY --from=builder /agenthub .
+COPY --from=builder /app/web/dist ./web/dist
 
 EXPOSE 8081
 
