@@ -85,6 +85,7 @@ type Workflow struct {
 	Status       string `db:"status" json:"status"`
 	CurrentPhase int    `db:"current_phase" json:"current_phase"`
 	Description  string `db:"description" json:"description"`
+	Variables    string `db:"variables" json:"variables,omitempty"`
 	CreatedAt    string `db:"created_at" json:"created_at"`
 	UpdatedAt    string `db:"updated_at" json:"updated_at"`
 }

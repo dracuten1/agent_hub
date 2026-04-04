@@ -214,6 +214,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 func (h *Handler) ListTasks(c *gin.Context) {
 	status := c.Query("status")
 	projectID := c.Query("project_id")
+	workflowID := c.Query("workflow_id")
 	assignee := c.Query("assignee")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if page < 1 {
@@ -232,6 +233,20 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	if status != "" {
 		whereClause += argPlaceholder(argIdx, "status")
 		args = append(args, status)
+		argIdx++
+	}
+
+	// Filter by project_id
+	if projectID != "" {
+		whereClause += " AND project_id = " + placeholder(argIdx)
+		args = append(args, projectID)
+		argIdx++
+	}
+
+	// Filter by workflow (via workflow_task_map join)
+	if workflowID != "" {
+		whereClause += " AND id IN (SELECT task_id FROM workflow_task_map WHERE workflow_id = " + placeholder(argIdx) + ")"
+		args = append(args, workflowID)
 		argIdx++
 	}
 
