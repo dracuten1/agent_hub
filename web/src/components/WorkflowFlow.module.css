@@ -1,4 +1,189 @@
-.flow { display: flex; align-items: flex-start; gap: 0; }
-.step { display: flex; align-items: center; }
-.connector { width: 40px; height: 2px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
+/* ── Flow container ──────────────────────────────────────────────────────── */
+.flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+}
+
+/* ── Group (phase or fork) ──────────────────────────────────────────────── */
+.group {
+  display: flex;
+  align-items: center;
+}
+
+/* ── Connector between groups ──────────────────────────────────────────── */
+.connector {
+  width: 32px;
+  height: 2px;
+  background: var(--border);
+  flex-shrink: 0;
+}
 .connector.done { background: var(--success); }
+
+/* ── Parallel fork ─────────────────────────────────────────────────────── */
+.fork {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Vertical stem sections above/below the fork */
+.forkStem {
+  width: 2px;
+  height: 20px;
+  background: var(--border);
+}
+
+/* Horizontal lines that spread from the stem to each lane */
+.forkLines {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+/* Each branch line (one per lane) */
+.forkBranch {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+}
+.forkBranch:first-child { border-radius: 2px 0 0 2px; }
+.forkBranch:last-child  { border-radius: 0 2px 2px 0; }
+
+/* ── Lane container ─────────────────────────────────────────────────────── */
+.lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-left: 2px solid var(--border);
+  border-right: 2px solid var(--border);
+}
+
+/* Each lane (vertical stack of connector + node) */
+.lane {
+  display: flex;
+  align-items: center;
+}
+
+.laneConnector {
+  display: flex;
+  align-items: center;
+}
+
+.laneLine {
+  width: 2px;
+  height: 12px;
+  background: var(--border);
+}
+.laneLine.laneDone { background: var(--success); }
+
+/* ── Parallel node card ────────────────────────────────────────────────── */
+.laneNode {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--bg-secondary);
+  transition: border-color var(--transition);
+}
+
+.laneNode.currentLane {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.laneNode.completedLane { border-color: var(--success); }
+
+.laneHeader {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.laneIdx {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.laneName {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.laneCheck {
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.laneMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* ── Mini progress ─────────────────────────────────────────────────────── */
+.miniTrack {
+  height: 3px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.miniFill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.miniFill.fillDone { background: var(--success); }
+
+/* ── Mobile: collapse to vertical ────────────────────────────────────── */
+@media (max-width: 767px) {
+  .flow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .connector {
+    width: 2px;
+    height: 24px;
+    margin: 0 auto;
+  }
+
+  .fork {
+    padding: 8px 0;
+  }
+
+  .lanes {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border: none;
+    gap: 8px;
+    justify-content: center;
+  }
+
+  .lane {
+    flex-direction: row;
+  }
+
+  .laneConnector { display: none; }
+
+  .forkStem,
+  .forkLines { display: none; }
+}

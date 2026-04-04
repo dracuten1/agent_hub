@@ -20,10 +20,20 @@
 .node.pending,
 .node.skipped   { opacity: 0.7; }
 
+/* ── Header ───────────────────────────────────────────────────────────── */
 .header {
   display: flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 2px 3px;
+  margin: -3px -3px 0;
+  transition: background var(--transition);
+}
+
+.header:hover {
+  background: var(--bg-tertiary);
 }
 
 .icon { flex-shrink: 0; color: var(--text-muted); }
@@ -41,6 +51,16 @@
   text-overflow: ellipsis;
 }
 
+.expandIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.expandIconOpen {
+  transform: rotate(-180deg);
+}
+
+/* ── Meta ──────────────────────────────────────────────────────────────── */
 .meta {
   display: flex;
   justify-content: space-between;
@@ -60,22 +80,62 @@
   color: var(--text-muted);
 }
 
-/* Task list */
+/* ── Expanded section ──────────────────────────────────────────────────── */
+.expanded {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+  overflow: hidden;
+}
+
+.expandedOpen {
+  grid-template-rows: 1fr;
+}
+
+.phaseDesc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0 0 8px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Task list ─────────────────────────────────────────────────────────── */
 .taskList {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
-  margin-top: 2px;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.taskItem {
+  display: flex;
+  flex-direction: column;
 }
 
 .taskRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 3px 0;
+  gap: 5px;
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+}
+
+.taskRow:hover {
+  background: var(--bg-tertiary);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.chevronOpen {
+  transform: rotate(-180deg);
 }
 
 .taskTitle {
@@ -98,4 +158,194 @@
   font-size: 10px;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* ─── Expandable header ─────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: filter 0.15s;
+}
+.header:hover { filter: brightness(1.15); }
+
+.expandIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  margin-left: 2px;
+}
+.expandIconOpen { transform: rotate(180deg); }
+
+/* ─── Expandable body ──────────────────────────────────────────────────────── */
+.expandedContent {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  transition: grid-template-rows 0.3s ease;
+}
+.expandedContentOpen {
+  grid-template-rows: 1fr;
+}
+
+.phaseDesc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 4px 0 8px;
+  overflow: hidden;
+}
+
+.noTasks {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+
+/* ─── Task row expand ───────────────────────────────────────────────────────── */
+.taskRow {
+  display: flex;
+  flex-direction: column;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+.taskRow:hover { background: rgba(255,255,255,0.03); }
+
+.taskHeader {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.chevronOpen { transform: rotate(180deg); }
+
+.taskBody {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.3s ease;
+}
+/* When open, allow up to 600px */
+.taskBody:has(+ *), .taskBody:has(~ *) {
+  /* nothing */
+}
+/* Use a CSS trick: the containing div sets max-height via JS or this approach */
+.taskBody {
+  /* expanded via class toggle */
+}
+.taskBody.open { max-height: 600px; overflow-y: auto; }
+
+/* ─── Artifact display ─────────────────────────────────────────────────────── */
+.artifact {
+  background: var(--bg-elevated, #1a1a2e);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 6px 0 4px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.artifact-body {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.artifact-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+.artifact-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.artifact-pre {
+  background: var(--bg-tertiary, #0d0d1a);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.artifact-md {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.artifact-md h1,
+.artifact-md h2,
+.artifact-md h3 {
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 8px 0 4px;
+}
+.artifact-md h2 { font-size: 13px; }
+.artifact-md h3 { font-size: 12px; }
+.artifact-md strong { color: var(--text-primary); font-weight: 600; }
+.artifact-md code {
+  background: var(--bg-tertiary, #0d0d1a);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--accent);
+}
+.artifact-md .code-block {
+  background: var(--bg-tertiary, #0d0d1a);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 11px;
+  overflow-x: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre;
+  margin: 6px 0;
+}
+.artifact-md ul {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 4px 0;
+}
+.artifact-md li { margin: 2px 0; }
+
+/* ── Task body (expandable artifact) ─────────────────────────────────── */
+.taskBody {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.taskBodyOpen {
+  max-height: 600px;
+}
+
+.noTasks {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0;
 }
