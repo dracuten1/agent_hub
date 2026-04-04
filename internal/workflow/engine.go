@@ -64,7 +64,7 @@ type WorkflowPhase struct {
 	WorkflowID     string          `db:"workflow_id" json:"workflow_id"`
 	PhaseName      string          `db:"phase_name" json:"name"`
 	PhaseIndex     int             `db:"phase_index" json:"index"`
-	PhaseType      string          `db:"phase_type" json:"phase_type"`
+	PhaseType      string          `db:"phase_type" json:"type"` // outer phase type`
 	TaskType       string          `db:"task_type" json:"task_type"`
 	Status         string          `db:"status" json:"status"`
 	Config         json.RawMessage `db:"config" json:"config,omitempty"`
@@ -102,16 +102,17 @@ type Template struct {
 
 // PhaseConfig represents configuration for a workflow phase
 type PhaseConfig struct {
-	Type         string          `json:"phase_type"`
-	Name         string          `json:"phase_name"`
-	TaskType     string          `json:"task_type"`
-	Count        int             `json:"count"`
-	PassCondition string         `json:"pass_condition"`
-	MaxRetries   int             `json:"max_retries"`
-	Auto         bool            `json:"auto"`
-	RequireOwner bool            `json:"require_owner"`
-	Approver     string          `json:"approver"`
-	GateType     string          `json:"gate_type"` // agent_gate or human_gate (nested in config in DB)
+		Type          string          `json:"type"`
+	Name          string          `json:"phase_name"`
+	TaskType      string          `json:"task_type"`
+	Count         int             `json:"count"`
+	PassCondition string          `json:"pass_condition"`
+	MaxRetries    int             `json:"max_retries"`
+	Auto          bool            `json:"auto"`
+	RequireOwner  bool            `json:"require_owner"`
+	Approver      string          `json:"approver"`
+	GateType      string          `json:"gate_type"`
+	Config        json.RawMessage `json:"config"`
 }
 
 // Engine manages workflow operations
@@ -844,6 +845,36 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 		if i == 0 {
 			status = PhaseActive // Bug 1 fix: was PhaseRunning, should be PhaseActive
 		}
+		// Parse nested config JSON if present (template input)
+		if len(pc.Config) > 0 && pc.Config != nil {
+			var nested struct {
+				PhaseType    string `json:"phase_type"`
+				Auto         bool   `json:"auto"`
+				RequireOwner bool   `json:"require_owner"`
+				PassCondition string `json:"pass_condition"`
+				Approver     string `json:"approver"`
+			}
+			if err := json.Unmarshal(pc.Config, &nested); err == nil {
+				if pc.GateType == "" && nested.PhaseType != "" {
+					pc.GateType = nested.PhaseType
+				}
+				if nested.Auto {
+					pc.Auto = true
+				}
+				if nested.RequireOwner {
+					pc.RequireOwner = true
+				}
+				if nested.PassCondition != "" {
+					pc.PassCondition = nested.PassCondition
+				}
+				if nested.Approver != "" {
+					pc.Approver = nested.Approver
+				}
+			}
+		}
+		log.Printf("[workflow] StartWorkflow phase %d: name=%s, gate_type=%s, auto=%v, require_owner=%v",
+			i, pc.Name, pc.GateType, pc.Auto, pc.RequireOwner)
+
 		// Build nested config JSON (phase_type, auto, require_owner, etc.)
 		configMap := map[string]interface{}{}
 		if pc.GateType != "" {
