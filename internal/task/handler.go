@@ -20,7 +20,7 @@ var validTransitions = map[string][]string{
 	"available":       {"claimed"},
 	"assigned":        {"claimed"},
 	"orphaned":        {"claimed"},
-	"claimed":         {"in_progress", "done", "review", "available"},
+	"claimed":         {"in_progress", "done", "review", "available", "failed"},
 	"in_progress":     {"done", "review", "needs_fix", "failed", "gate_decision"},
 	"done":            {"review", "test", "needs_fix", "escalated", "gate_decision"},
 	"review":          {"done", "test", "needs_fix", "gate_decision"},
