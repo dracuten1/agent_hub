@@ -49,7 +49,8 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	var project Project
-	h.db.Get(&project, "SELECT * FROM projects WHERE id = $1", id)
+	h.db.Get(&project, `SELECT id, name, description, user_id, status, created_at, updated_at
+		FROM projects WHERE id = $1`, id)
 
 	c.JSON(201, gin.H{"project": project})
 }
@@ -59,7 +60,8 @@ func (h *Handler) List(c *gin.Context) {
 
 	var projects []Project
 	err := h.db.Select(&projects,
-		"SELECT * FROM projects WHERE user_id = $1 OR 'admin' = $2 ORDER BY created_at DESC",
+		`SELECT id, name, description, user_id, status, created_at, updated_at
+		FROM projects WHERE user_id = $1 OR 'admin' = $2 ORDER BY created_at DESC`,
 		userID, userID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Failed to list projects"})
@@ -76,7 +78,8 @@ func (h *Handler) Get(c *gin.Context) {
 	id := c.Param("id")
 
 	var project Project
-	err := h.db.Get(&project, "SELECT * FROM projects WHERE id = $1", id)
+	err := h.db.Get(&project, `SELECT id, name, description, user_id, status, created_at, updated_at
+		FROM projects WHERE id = $1`, id)
 	if err == sql.ErrNoRows {
 		c.JSON(404, gin.H{"error": "Project not found"})
 		return

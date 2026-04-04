@@ -197,7 +197,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 	h.logEvent(taskID, "pm", "created", "", status, "Task created by PM")
 
 	var task Task
-	if err := h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID); err != nil {
+	if err := h.db.Get(&task, "SELECT id, project_id, feature_id, title, description, priority, status, task_type, assignee, required_skills, retry_count, max_retries, release_count, workflow_status, pending_deps, progress, review_verdict, review_severity, review_issues, test_verdict, test_issues, escalated, claimed_at, completed_at, deadline, created_by, user_id, created_at, updated_at FROM tasks WHERE id = $1", taskID); err != nil {
 		c.JSON(500, gin.H{"error": "Failed to get created task"})
 		return
 	}
@@ -279,7 +279,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		orderBy = " ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 END, created_at DESC"
 	}
 
-	query := "SELECT * FROM tasks WHERE " + whereClause + orderBy
+	query := "SELECT id, project_id, feature_id, title, description, priority, status, task_type, assignee, required_skills, retry_count, max_retries, release_count, workflow_status, pending_deps, progress, review_verdict, review_severity, review_issues, test_verdict, test_issues, escalated, claimed_at, completed_at, deadline, created_by, user_id, created_at, updated_at FROM tasks WHERE " + whereClause + orderBy
 	query += " LIMIT " + placeholder(argIdx) + " OFFSET " + placeholder(argIdx+1)
 	args = append(args, limit, offset)
 
@@ -311,7 +311,7 @@ func (h *Handler) GetTask(c *gin.Context) {
 	id := c.Param("id")
 
 	var task Task
-	err := h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", id)
+	err := h.db.Get(&task, "SELECT id, project_id, feature_id, title, description, priority, status, task_type, assignee, required_skills, retry_count, max_retries, release_count, workflow_status, pending_deps, progress, review_verdict, review_severity, review_issues, test_verdict, test_issues, escalated, claimed_at, completed_at, deadline, created_by, user_id, created_at, updated_at FROM tasks WHERE id = $1", id)
 	if err == sql.ErrNoRows {
 		c.JSON(404, gin.H{"error": "Task not found"})
 		return
@@ -331,7 +331,7 @@ func (h *Handler) GetTask(c *gin.Context) {
 		Note       *string `json:"note" db:"note"`
 		CreatedAt  time.Time `json:"created_at" db:"created_at"`
 	}
-	h.db.Select(&events, "SELECT * FROM task_events WHERE task_id = $1 ORDER BY created_at DESC", id)
+	h.db.Select(&events, "SELECT id, task_id, event_type, old_status, new_status, actor, details, created_at FROM task_events WHERE task_id = $1 ORDER BY created_at DESC", id)
 
 	c.JSON(200, gin.H{"task": task, "events": events})
 }
@@ -539,7 +539,7 @@ func (h *Handler) ReleaseTask(c *gin.Context) {
 	h.broadcastTaskEvent(taskID, "task_updated", status, "available")
 
 	var task Task
-	h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID)
+	h.db.Get(&task, "SELECT id, project_id, feature_id, title, description, priority, status, task_type, assignee, required_skills, retry_count, max_retries, release_count, workflow_status, pending_deps, progress, review_verdict, review_severity, review_issues, test_verdict, test_issues, escalated, claimed_at, completed_at, deadline, created_by, user_id, created_at, updated_at FROM tasks WHERE id = $1", taskID)
 
 	c.JSON(200, gin.H{"message": "Task released", "task": task, "previous_assignee": assignee})
 }
@@ -579,7 +579,7 @@ func (h *Handler) ClaimTask(c *gin.Context) {
 	h.logEvent(taskID, agentNameStr, "claimed", oldStatus, "claimed", "Task claimed by agent")
 
 	var task Task
-	h.db.Get(&task, "SELECT * FROM tasks WHERE id = $1", taskID)
+	h.db.Get(&task, "SELECT id, project_id, feature_id, title, description, priority, status, task_type, assignee, required_skills, retry_count, max_retries, release_count, workflow_status, pending_deps, progress, review_verdict, review_severity, review_issues, test_verdict, test_issues, escalated, claimed_at, completed_at, deadline, created_by, user_id, created_at, updated_at FROM tasks WHERE id = $1", taskID)
 
 	h.broadcastTaskEvent(taskID, "task_updated", oldStatus, "claimed")
 
