@@ -111,6 +111,7 @@ type PhaseConfig struct {
 	Auto         bool            `json:"auto"`
 	RequireOwner bool            `json:"require_owner"`
 	Approver     string          `json:"approver"`
+	GateType     string          `json:"gate_type"` // agent_gate or human_gate (nested in config in DB)
 }
 
 // Engine manages workflow operations
@@ -300,6 +301,21 @@ func (e *Engine) enterGatePhase(ctx context.Context, wfID string, phase *Workflo
 		}
 		e.sendGateNotification(wfID, phase, approver, requireOwner)
 		return nil
+	}
+
+	// Agent gate: check if auto-approve
+	phaseType := cfg.GetString("phase_type")
+	autoGate  := cfg.GetBool("auto")
+
+	if phaseType == "agent_gate" && autoGate {
+		// Auto-approve: mark completed immediately, advance
+		_, err := e.db.ExecContext(ctx,
+			`UPDATE workflow_phases SET status=$1,updated_at=NOW() WHERE id=$2`,
+			PhaseCompleted, phase.ID)
+		if err != nil {
+			return fmt.Errorf("enterGatePhase: auto-approve update phase: %w", err)
+		}
+		return e.advanceWorkflow(wfID)
 	}
 
 	// Agent gate: create a gate_decision task and activate the phase
@@ -828,10 +844,28 @@ func (e *Engine) StartWorkflow(templateID, name, projectID, description, variabl
 		if i == 0 {
 			status = PhaseActive // Bug 1 fix: was PhaseRunning, should be PhaseActive
 		}
+		// Build nested config JSON (phase_type, auto, require_owner, etc.)
+		configMap := map[string]interface{}{}
+		if pc.GateType != "" {
+			configMap["phase_type"] = pc.GateType
+		}
+		if pc.Auto {
+			configMap["auto"] = true
+		}
+		if pc.RequireOwner {
+			configMap["require_owner"] = true
+		}
+		if pc.PassCondition != "" {
+			configMap["pass_condition"] = pc.PassCondition
+		}
+		if pc.Approver != "" {
+			configMap["approver"] = pc.Approver
+		}
+		configJSON, _ := json.Marshal(configMap)
 		_, err = tx.Exec(
 			`INSERT INTO workflow_phases (id, workflow_id, phase_name, phase_index, phase_type, task_type, status, config)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			phaseID, wfID, pc.Name, i, pc.Type, pc.TaskType, status, []byte("{}"))
+			phaseID, wfID, pc.Name, i, pc.Type, pc.TaskType, status, configJSON)
 		if err != nil {
 			return nil, fmt.Errorf("insert phase: %w", err)
 		}

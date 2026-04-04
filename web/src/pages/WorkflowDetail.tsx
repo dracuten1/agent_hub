@@ -109,7 +109,7 @@ export function WorkflowDetail() {
       </div>
 
       <div className={styles.pipelineScroll}>
-        <WorkflowFlow phases={phases} currentPhaseIndex={workflow.current_phase} />
+        <WorkflowFlow phases={phases} currentPhaseIndex={workflow.current_phase} workflowId={workflow.id} />
       </div>
 
       {gatePhase && (

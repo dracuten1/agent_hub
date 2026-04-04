@@ -60,6 +60,8 @@ export const apiApproveWorkflow = (id: string, note?: string) =>
   post<{ message: string }>(`/workflows/${id}/approve`, note ? { note } : undefined);
 export const apiRejectWorkflow = (id: string, note?: string) =>
   post<{ message: string }>(`/workflows/${id}/reject`, note ? { note } : undefined);
+export const apiApprovePhase = (workflowId: string, phaseId: string, note?: string) =>
+  post<{ message: string }>(`/workflows/${workflowId}/phases/${phaseId}/approve`, note ? { note } : undefined);
 
 // ─── Projects ──────────────────────────────────────────────────────────────────
 export const apiProjects = () => get<ProjectListResponse>('/projects');

@@ -162,3 +162,138 @@
   font-style: italic;
   margin: 0;
 }
+
+/* ── Progress track (replaces shared ProgressBar for phase node) ── */
+.progressTrack {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.fill_completed { background: var(--success); }
+.fill_active    { background: var(--accent); }
+.fill_running   { background: var(--accent); }
+.fill_pending   { background: var(--border); }
+.fill_waiting_approval { background: var(--warning); }
+.fill_failed    { background: var(--error); }
+.fillDefault    { background: var(--border); }
+
+/* ── Subtype badges ─────────────────────────────────────────────────── */
+.subtypeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.badgeAgentGate  { background: rgba(59,130,246,0.18); color: #60a5fa; }
+.badgeHumanGate  { background: rgba(251,146,60,0.18); color: #fb923c; }
+.badgeDecision   { background: rgba(168,85,247,0.18); color: #c084fc; }
+.badgePerDev     { background: rgba(16,185,129,0.18); color: #34d399; }
+.badgeNormal     { background: var(--bg-tertiary);    color: var(--text-muted); }
+
+/* ── Auto badge ──────────────────────────────────────────────────────── */
+.autoBadge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(16,185,129,0.15);
+  color: #34d399;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ── PM decision display ────────────────────────────────────────────── */
+.decisionBox {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 6px 0;
+}
+
+.decisionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.decisionVerdict {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.verdictPass { color: var(--success); }
+.verdictFail { color: var(--error); }
+
+.decisionAssignee {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.decisionIssues {
+  margin: 4px 0 0 14px;
+  padding: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.decisionIssues li + li { margin-top: 2px; }
+
+.decisionResult {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
+/* ── Approve section (human gate) ─────────────────────────────────── */
+.approveSection {
+  margin: 8px 0;
+  padding: 8px;
+  background: rgba(251,146,60,0.07);
+  border: 1px solid rgba(251,146,60,0.25);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.approveBtn {
+  padding: 6px 14px;
+  background: var(--warning);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: opacity 0.15s ease;
+}
+
+.approveBtn:hover:not(:disabled) { opacity: 0.88; }
+.approveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.approveError {
+  font-size: 10px;
+  color: var(--error);
+  margin: 0;
+}

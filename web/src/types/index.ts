@@ -46,6 +46,14 @@ export interface Task {
   dependencies?: string[];
   created_at?: string;
   updated_at?: string;
+  // Gate decision fields
+  review_verdict?: 'pass' | 'fail';
+  review_issues?: string[];
+  // Workflow task map
+  assigned_role?: string;
+  created_by?: string;
+  // Auto-queue indicator: true if created by engine (not manually)
+  auto_created?: boolean;
 }
 
 export interface WorkflowTemplate {
